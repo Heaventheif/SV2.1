@@ -122,7 +122,7 @@ async function cleanTemp(p) {
 }
 
 // ── إرسال مقطع صوت ──────────────────────────────────────────
-async function sendTrack(api, threadID, messageID, track) {
+async function sendTrack(api, threadID, messageID, track, statusMsgId = null) {
   let filePath = null;
   try {
     const result = await streamTrack(track);
@@ -143,6 +143,7 @@ async function sendTrack(api, threadID, messageID, track) {
       )
     );
 
+    if (statusMsgId) { try { await api.unsendMessage(statusMsgId); } catch (_) {} }
     await sendMoodSticker(api, threadID, result.title);
   } finally {
     await cleanTemp(filePath);
@@ -232,8 +233,10 @@ module.exports = {
     if (global.Kagenou?.replies?.[Reply.statusMsgId])
       delete global.Kagenou.replies[Reply.statusMsgId];
 
+    const listMsgId = Reply.statusMsgId;
+    try { await api.editMessage(`⏳ جارٍ تحميل: ${Reply.tracks[idx].title || ""}...`, listMsgId); } catch (_) {}
     try {
-      await sendTrack(api, threadID, messageID, Reply.tracks[idx]);
+      await sendTrack(api, threadID, messageID, Reply.tracks[idx], listMsgId);
     } catch (err) {
       api.sendMessage(`❌ ${err.message?.substring(0, 200)}`, threadID, null, messageID);
     }

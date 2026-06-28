@@ -76,7 +76,7 @@ async function cleanTemp(p) {
 }
 
 // ── تحميل + إرسال ────────────────────────────────────────────
-async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4) {
+async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4, statusMsgId = null) {
   let filePath = null;
   try {
     const dl  = await downloadFromHF(ytUrl, wantMp4);
@@ -104,6 +104,7 @@ async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4) {
       )
     );
 
+    if (statusMsgId) { try { await api.unsendMessage(statusMsgId); } catch (_) {} }
     if (!wantMp4) await sendMoodSticker(api, threadID, dl.title);
 
   } catch (err) {
@@ -233,7 +234,8 @@ module.exports = {
               delete global.client.reactionListener[sent.messageID];
               if (global.Kagenou?.replies) delete global.Kagenou.replies[sent.messageID];
 
-              await downloadAndSend(api, threadID, messageID, chosen.url, wantMp4R);
+              try { await api.editMessage(`⏳ جارٍ تحميل: ${chosen.title || ''}...`, sent.messageID); } catch (_) {}
+              await downloadAndSend(api, threadID, messageID, chosen.url, wantMp4R, sent.messageID);
             },
           };
           setTimeout(() => {
@@ -266,6 +268,8 @@ module.exports = {
     delete global.client?.reactionListener?.[Reply.statusMsgId];
     delete global.Kagenou?.replies?.[Reply.statusMsgId];
 
-    await downloadAndSend(api, threadID, messageID, chosen.url, wantMp4);
+    const listMsgId = Reply.statusMsgId;
+    try { await api.editMessage(`⏳ جارٍ تحميل: ${chosen.title || ''}...`, listMsgId); } catch (_) {}
+    await downloadAndSend(api, threadID, messageID, chosen.url, wantMp4, listMsgId);
   },
 };

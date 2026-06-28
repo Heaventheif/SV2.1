@@ -30,7 +30,7 @@ function react(api, msgID, emoji) {
 }
 
 // ── تحميل وإرسال أغنية ───────────────────────────────────────
-async function downloadAndSend(api, threadID, messageID, originMsgID, track) {
+async function downloadAndSend(api, threadID, messageID, originMsgID, track, statusMsgId = null) {
   const filePath = getTempPath("dl");
   try {
     const dlRes = await axios.get('https://api.ferdev.my.id/downloader/soundcloud', {
@@ -66,6 +66,7 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track) {
       )
     );
 
+    if (statusMsgId) { try { await api.unsendMessage(statusMsgId); } catch (_) {} }
     if (originMsgID) react(api, originMsgID, "✅");
     await sendMoodSticker(api, threadID, track.title);
 
@@ -119,7 +120,15 @@ module.exports = {
         delete global.soundcloudSearchSessions[senderID];
 
         if (originMsgID) react(api, originMsgID, "🤖");
-        await downloadAndSend(api, threadID, messageID, originMsgID, chosenTrack);
+        let stMsgId3 = null;
+        try {
+          const st3 = await new Promise((res, rej) =>
+            api.sendMessage(`⏳ جارٍ تحميل: ${chosenTrack.title || ""}...`,
+              threadID, (err, info) => err ? rej(err) : res(info), messageID)
+          );
+          stMsgId3 = st3?.messageID;
+        } catch (_) {}
+        await downloadAndSend(api, threadID, messageID, originMsgID, chosenTrack, stMsgId3);
       }
       return;
     }
