@@ -6,13 +6,27 @@ const os = require("os");
 
 const cache = new Map();
 const CACHE_TTL = 3600 * 1000;
+const CACHE_MAX_ENTRIES = 150; // حد أقصى لعدد العناصر المخزنة لمنع امتلاء الذاكرة
+
 const cacheGet = (k) => {
   const i = cache.get(k);
   if (!i) return undefined;
   if (Date.now() > i.expires) { cache.delete(k); return undefined; }
+  // إعادة إدراج العنصر في آخر الـ Map يجعله "الأحدث استخدامًا" (LRU)
+  cache.delete(k);
+  cache.set(k, i);
   return i.value;
 };
-const cacheSet = (k, v) => cache.set(k, { value: v, expires: Date.now() + CACHE_TTL });
+
+const cacheSet = (k, v) => {
+  if (cache.has(k)) cache.delete(k);
+  cache.set(k, { value: v, expires: Date.now() + CACHE_TTL });
+  // إذا تجاوز العدد الحد المسموح، حذف الأقدم (أول عنصر في الـ Map)
+  while (cache.size > CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    cache.delete(oldestKey);
+  }
+};
 
 if (!global.__novelCacheCleanupRegistered) {
   global.__novelCacheCleanupRegistered = true;
@@ -24,13 +38,22 @@ if (!global.__novelCacheCleanupRegistered) {
   }, CACHE_TTL);
 }
 
-const BROWSER_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+// قائمة User-Agents حديثة يتم التدوير بينها عشوائيًا في كل طلب
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edg/125.0.0.0 Chrome/125.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+];
+const randomUA = () => USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+
+const BROWSER_HEADERS = () => ({
+  "User-Agent": randomUA(),
   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
   "Accept-Language": "en-US,en;q=0.9",
   "Accept-Encoding": "gzip, deflate, br",
   "Cache-Control": "no-cache",
-};
+});
 
 const FALLBACK_SITES = [
   {
@@ -57,12 +80,60 @@ const FALLBACK_SITES = [
     slugify: (n) => n.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
     buildChapter: (ch) => String(ch),
   },
+  // ─── المواقع الجديدة ───────────────────────────────────────────
+  {
+    // WuxiaBox: https://www.wuxiabox.com/novel/{slug}_{ch}.html
+    name: "WuxiaBox",
+    buildUrl: (slug, ch) => `https://www.wuxiabox.com/novel/${slug}_${ch}.html`,
+    selectors: ["article#chapter-article .chapter-content", "div.chapter-content", ".page-in .chapter-content"],
+    titleSel: [".truyen-title", "h1.chapter-title", "title"],
+    slugify: (n) => n.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+    buildChapter: (ch) => String(ch),
+  },
+  {
+    // LNMTL: https://lnmtl.com/chapter/{slug}-chapter-{ch}
+    name: "LNMTL",
+    buildUrl: (slug, ch) => `https://lnmtl.com/chapter/${slug}-chapter-${ch}`,
+    selectors: ["div#chapter-container", ".chapter-container", ".chapter-body"],
+    titleSel: [".chapter-title", "h1", "title"],
+    slugify: (n) => n.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+    buildChapter: (ch) => String(ch),
+  },
+  {
+    // NovelLive: https://novellive.app/book/{slug}/chapter-{ch}
+    name: "NovelLive",
+    buildUrl: (slug, ch) => `https://novellive.app/book/${slug}/chapter-${ch}`,
+    selectors: ["div#main1 .m-read .wp", "div.wp", ".m-read .wp"],
+    titleSel: [".book-name", "h1.title", "title"],
+    slugify: (n) => n.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+    buildChapter: (ch) => String(ch),
+  },
+  {
+    // INovelHub: https://inovelhub.com/novel/{slug}/chapter-{ch}
+    name: "INovelHub",
+    buildUrl: (slug, ch) => `https://inovelhub.com/novel/${slug}/chapter-${ch}`,
+    selectors: ["div#chapter-content", ".chapter-content", "#chapter-content"],
+    titleSel: [".novel-title", "h1", "title"],
+    slugify: (n) => n.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+    buildChapter: (ch) => String(ch),
+  },
+  {
+    // NovelCrest: https://www.novelcrest.com/book/{slug}-2/{ch}.html
+    name: "NovelCrest",
+    buildUrl: (slug, ch) => `https://www.novelcrest.com/book/${slug}-2/${ch}.html`,
+    selectors: ["div#chr-content", ".chr-c", "#chr-content"],
+    titleSel: [".chr-title", "h1", "title"],
+    slugify: (n) => n.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+    buildChapter: (ch) => String(ch),
+  },
 ];
 
 const PROXIES = [
-  (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-  (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+  { build: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, successCount: 0 },
+  { build: (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`, successCount: 0 },
 ];
+// ترتيب البروكسيات تنازليًا بحسب عدد مرات نجاحها، فالأنجح يُجرَّب أولًا في كل مرة
+const orderedProxies = () => [...PROXIES].sort((a, b) => b.successCount - a.successCount);
 
 const FILTER_WORDS = [
   "novelfull.com", "boxnovel", "novelmt.com", "mtlnovel.me",
@@ -70,19 +141,89 @@ const FILTER_WORDS = [
   "table of contents", "access denied", "just a moment", "cloudflare",
   "enable javascript", "read more at",
 ];
-const isFiltered = (t) => FILTER_WORDS.some(w => t.toLowerCase().includes(w));
+
+// أنماط جمل "الحماية من السرقة" التي تُدرج وسط الفقرات في مواقع كثيرة
+// (تُكتب بصيغ متعددة لكنها تدور حول نفس المعنى: "إذا كنت تقرأ هذا في موقع آخر فهو مسروق")
+const STOLEN_CONTENT_PATTERNS = [
+  /stol(en|e)\s+(content|chapter|novel)/i,
+  /(this|the)\s+(chapter|content|novel)\s+(is|was)\s+stolen/i,
+  /if\s+you('| a)re\s+reading\s+this\s+on/i,
+  /please\s+read\s+(this|it)\s+on\s+(the\s+)?original/i,
+  /unauthorized\s+(use|reproduction|copy)/i,
+  /support\s+the\s+(author|translator)\s+by\s+reading/i,
+];
+
+const isFiltered = (t) => {
+  const lower = t.toLowerCase();
+  if (FILTER_WORDS.some(w => lower.includes(w))) return true;
+  if (STOLEN_CONTENT_PATTERNS.some(re => re.test(t))) return true;
+  return false;
+};
+
+// تطبيع الرموز الغريبة التي تضعها بعض المواقع لتشتيت أدوات الكشط
+// (نقاط/أقواس متكررة، مسافات غير منتظمة) قبل إرسال النص للترجمة
+function cleanText(t) {
+  return t
+    .replace(/\u00a0/g, " ")           // مسافات غير منقطعة (nbsp)
+    .replace(/[•◆▪]{2,}/g, " ")        // رموز تزيينية متكررة
+    .replace(/\.{4,}/g, "...")         // نقاط متتالية مفرطة
+    .replace(/\s{2,}/g, " ")           // مسافات متعددة
+    .trim();
+}
+
+// ─── تحويل دوال الـ callback لـ Promise (لتقليل التكرار) ─────
+const sendMessageAsync = (api, body, threadID, messageID) =>
+  new Promise((resolve, reject) =>
+    api.sendMessage(body, threadID, (err, info) => (err ? reject(err) : resolve(info)), messageID)
+  );
+
+// ─── سباق سريع: أول نتيجة ناجحة تكسب (بدل التسلسل) ────────────
+async function raceFirstSuccess(tasks) {
+  return new Promise((resolve, reject) => {
+    let pending = tasks.length;
+    const errors = [];
+    if (pending === 0) return reject(new Error("لا توجد مصادر متاحة"));
+    tasks.forEach((task) => {
+      task.promise
+        .then((value) => resolve({ value, siteName: task.siteName }))
+        .catch((err) => {
+          errors.push(`${task.siteName}: ${err.message?.substring(0, 60)}`);
+          pending -= 1;
+          if (pending === 0) reject(new Error(errors.join(" | ")));
+        });
+    });
+  });
+}
+
+// تقسيم فقرة مفردة طويلة جدًا (حالة نادرة) عند حدود الجملة بدل قطع الحروف عشوائيًا
+function splitLongParagraph(p, maxLen) {
+  if (p.length <= maxLen) return [p];
+  const sentences = p.match(/[^.!?\u061f\u060c]+[.!?\u061f\u060c]*/g) || [p];
+  const out = [];
+  let cur = "";
+  for (const s of sentences) {
+    if ((cur + s).length > maxLen && cur) { out.push(cur); cur = s; }
+    else cur += s;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 
 async function translateBatch(paragraphs) {
   if (!paragraphs?.length) return [];
   const arabicChars = paragraphs.join("").match(/[\u0600-\u06FF]/g);
   if (arabicChars && arabicChars.length > 50) return paragraphs;
 
+  const MAX_CHUNK = 3800;
   const SEP = " ||| ";
+  // كل فقرة تُقسَّم أولًا عند حدود الجملة إذا كانت أطول من حد الحزمة بمفردها
+  const safeParagraphs = paragraphs.flatMap(p => splitLongParagraph(p, MAX_CHUNK));
+
   const chunks = [];
   let current = "";
-  for (const p of paragraphs) {
+  for (const p of safeParagraphs) {
     const candidate = current ? current + SEP + p : p;
-    if (candidate.length > 3800 && current) { chunks.push(current); current = p; }
+    if (candidate.length > MAX_CHUNK && current) { chunks.push(current); current = p; }
     else current = candidate;
   }
   if (current) chunks.push(current);
@@ -93,21 +234,32 @@ async function translateBatch(paragraphs) {
   for (let i = 0; i < chunks.length; i++) {
     try {
       const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=${encodeURIComponent(chunks[i])}`;
-      const res = await axios.get(url, { timeout: 15000, headers: { "User-Agent": "Mozilla/5.0" } });
+      const res = await axios.get(url, { timeout: 15000, headers: { "User-Agent": randomUA() } });
       if (res.data?.[0]) out.push(res.data[0].map(x => x[0]).filter(Boolean).join(""));
       else out.push(chunks[i]);
     } catch { out.push(chunks[i]); }
-    if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 300));
+    // تأخير عشوائي بين 300-700ms بين الطلبات لتقليل احتمال تقييد المعدل (rate limiting)
+    if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 300 + Math.random() * 400));
   }
 
   const result = out.join(SEP).split("|||").map(p => p.trim()).filter(Boolean);
   return result.length > 0 ? result : paragraphs;
 }
 
+// نسخة مكاشة من translateBatch: تتجنب إعادة ترجمة نفس الفصل لمستخدمين مختلفين
+async function translateBatchCached(cacheKey, paragraphs) {
+  const tKey = `translated:${cacheKey}`;
+  const cached = cacheGet(tKey);
+  if (cached) return cached;
+  const translated = await translateBatch(paragraphs);
+  cacheSet(tKey, translated);
+  return translated;
+}
+
 async function fetchHTML(url) {
   const attempts = [
-    { url, headers: BROWSER_HEADERS },
-    ...PROXIES.map(p => ({ url: p(url), headers: { "User-Agent": BROWSER_HEADERS["User-Agent"] } }))
+    { url, headers: BROWSER_HEADERS(), proxyRef: null },
+    ...orderedProxies().map((p) => ({ url: p.build(url), headers: { "User-Agent": randomUA() }, proxyRef: p }))
   ];
   for (const a of attempts) {
     try {
@@ -117,6 +269,7 @@ async function fetchHTML(url) {
       if (html.length < 500) continue;
       const lower = html.substring(0, 3000).toLowerCase();
       if (lower.includes("just a moment") || lower.includes("cloudflare")) continue;
+      if (a.proxyRef) a.proxyRef.successCount += 1; // تسجيل نجاح هذا البروكسي لرفع أولويته لاحقًا
       return html;
     } catch (_) {}
   }
@@ -133,11 +286,11 @@ function extractContent($, selectors) {
   container.find("script,style,ins,.ads,.ad,noscript").remove();
   let paras = [];
   container.find("p").each((_, el) => {
-    const t = $(el).text().trim();
+    const t = cleanText($(el).text());
     if (t.length > 15 && !isFiltered(t)) paras.push(t);
   });
   if (paras.length < 3) {
-    paras = container.text().trim().split(/\n+/).map(p => p.trim()).filter(p => p.length > 15 && !isFiltered(p));
+    paras = container.text().split(/\n+/).map(p => cleanText(p)).filter(p => p.length > 15 && !isFiltered(p));
   }
   return paras.length > 0 ? paras : null;
 }
@@ -148,6 +301,8 @@ async function fetchFromFallback(site, novelName, chapterNum) {
   if (cached) return cached;
 
   const slug = site.slugify(novelName);
+  if (!slug) throw new Error("اسم الرواية غير صالح بعد التحويل لرابط");
+
   const url = site.buildUrl(slug, site.buildChapter(chapterNum));
 
   const html = await fetchHTML(url);
@@ -190,33 +345,29 @@ async function sendAsChunks(api, threadID, messageID, header, translated, divide
     const suffix = chunks.length > 1 ? `\n\n${divider}\n📌 ${i + 1} / ${chunks.length}` : "";
     const body = chunks[i] + suffix;
     await new Promise(r => setTimeout(r, 800));
-    await new Promise((resolve, reject) =>
-      api.sendMessage(body, threadID, (err, info) => err ? reject(err) : resolve(info), messageID)
-    );
+    await sendMessageAsync(api, body, threadID, messageID);
   }
 }
 
 // ─── إرسال كملف .txt ─────────────────────────────────────────
 async function sendAsFile(api, threadID, messageID, novelName, chapterNum, header, translated) {
   const content = header + translated.join("\n\n");
-  const safeNovel = novelName.replace(/[^a-zA-Z0-9 _-]/g, "").trim().replace(/\s+/g, "_");
+  const safeNovel = novelName.replace(/[^a-zA-Z0-9 _-]/g, "").trim().replace(/\s+/g, "_") || "novel";
   const fileName = `${safeNovel}_Ch${chapterNum}.txt`;
   const tmpPath = path.join(os.tmpdir(), fileName);
 
-  fs.writeFileSync(tmpPath, content, "utf8");
+  fs.writeFileSync(tmpPath, content, "utf8"); // إذا فشل هنا، لا يوجد ملف لحذفه أصلاً
 
-  return new Promise((resolve, reject) => {
-    api.sendMessage(
-      { body: "", attachment: fs.createReadStream(tmpPath) },
+  try {
+    return await sendMessageAsync(
+      api,
+      { body: `📖 تم تجهيز الفصل ${chapterNum} كملف نصي لسهولة القراءة.`, attachment: fs.createReadStream(tmpPath) },
       threadID,
-      (err, info) => {
-        try { fs.unlinkSync(tmpPath); } catch (_) {}
-        if (err) reject(err);
-        else resolve(info);
-      },
       messageID
     );
-  });
+  } finally {
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+  }
 }
 
 module.exports = {
@@ -244,7 +395,9 @@ module.exports = {
         "  .novel solo leveling 100\n" +
         "  .novel kingdom's bloodline 627\n\n" +
         "🌐 المصادر:\n" +
-        "  ① AllNovelFull ② NovelFull ③ NovelFire\n\n" +
+        "  ① AllNovelFull ② NovelFull ③ NovelFire\n" +
+        "  ④ WuxiaBox ⑤ LNMTL ⑥ NovelLive\n" +
+        "  ⑦ INovelHub ⑧ NovelCrest\n\n" +
         "🔄 الترجمة تلقائية للعربية\n" +
         "📨 يُرسل كرسائل مقطعة + ملف .txt",
         threadID, null, messageID
@@ -259,17 +412,22 @@ module.exports = {
       );
     }
     const chapterNum = parseInt(lastArg);
-    const novelName  = args.slice(0, -1).join(" ");
+    const novelName  = args.slice(0, -1).join(" ").trim();
+
+    if (!novelName) {
+      return api.sendMessage(
+        "❌ يجب كتابة اسم الرواية قبل رقم الفصل\n💡 مثال: .novel martial peak 1",
+        threadID, null, messageID
+      );
+    }
 
     let statusMsgId = null;
     try {
-      const sent = await new Promise((resolve, reject) =>
-        api.sendMessage(
-          `⏳ جاري جلب الفصل...\n📖 ${novelName}\n📄 الفصل ${chapterNum}\n\n⚠️ قد يستغرق 30-90 ثانية`,
-          threadID,
-          (err, info) => err ? reject(err) : resolve(info),
-          messageID
-        )
+      const sent = await sendMessageAsync(
+        api,
+        `⏳ جاري جلب الفصل...\n📖 ${novelName}\n📄 الفصل ${chapterNum}\n\n⚠️ قد يستغرق حتى 30 ثانية`,
+        threadID,
+        messageID
       );
       statusMsgId = sent?.messageID;
     } catch (_) {}
@@ -278,23 +436,32 @@ module.exports = {
       try { if (statusMsgId) await api.editMessage(text, statusMsgId); } catch (_) {}
     };
 
-    let result = null;
+    // ─── تجريب كل المواقع بالتوازي (أول نجاح يكسب) مع سقف زمني إجمالي ───
+    await updateStatus(`🔍 جلب من ${FALLBACK_SITES.length} مصادر بالتوازي...\n📖 ${novelName}\n📄 الفصل ${chapterNum}`);
 
-    for (const site of FALLBACK_SITES) {
-      try {
-        await updateStatus(`🔍 ${site.name}...\n📖 ${novelName}\n📄 الفصل ${chapterNum}`);
-        result = await fetchFromFallback(site, novelName, chapterNum);
-        console.log(`[NOVEL] ✅ ${site.name} نجح`);
-        break;
-      } catch (err) {
-        console.warn(`[NOVEL] ${site.name} فشل: ${err.message?.substring(0, 60)}`);
-        await new Promise(r => setTimeout(r, 400));
-      }
+    const OVERALL_TIMEOUT = 25000;
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("انتهى الوقت المسموح (timeout)")), OVERALL_TIMEOUT)
+    );
+
+    let result = null;
+    let cacheKeyUsed = null;
+    try {
+      const tasks = FALLBACK_SITES.map((site) => ({
+        siteName: site.name,
+        promise: fetchFromFallback(site, novelName, chapterNum),
+      }));
+      const winner = await Promise.race([raceFirstSuccess(tasks), timeoutPromise]);
+      result = winner.value;
+      cacheKeyUsed = `${winner.siteName}:${novelName}:${chapterNum}`;
+      console.log(`[NOVEL] ✅ ${winner.siteName} نجح أولاً`);
+    } catch (err) {
+      console.warn(`[NOVEL] فشل كل المصادر أو انتهى الوقت: ${err.message?.substring(0, 200)}`);
     }
 
     if (!result) {
       const errMsg =
-        `❌ لم أجد الفصل في أي مصدر\n\n` +
+        `❌ لم أجد الفصل في أي مصدر (أو استغرق وقتًا طويلًا)\n\n` +
         `📖 ${novelName}\n📄 الفصل ${chapterNum}\n\n` +
         `💡 تأكد من:\n• الاسم الإنجليزي الصحيح\n• رقم الفصل صحيح`;
       try {
@@ -305,7 +472,7 @@ module.exports = {
     }
 
     await updateStatus(`🔄 ترجمة ${result.paragraphs.length} فقرة...\n📖 ${result.title}\n🌐 ${result.siteName}`);
-    const translated = await translateBatch(result.paragraphs);
+    const translated = await translateBatchCached(cacheKeyUsed, result.paragraphs);
 
     const divider = "─".repeat(35);
     const chapterLabel = result.chapterTitle || `الفصل ${chapterNum}`;
