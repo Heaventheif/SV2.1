@@ -81,13 +81,21 @@ async function tryNextSite(sessionId) {
 
   session.index++;
 
+  // ─── تشخيص: طباعة المتغيرات والرابط المُرسَل ───────────────
+  console.log(`[NOVEL2] HF_NOVEL_URL   = ${HF_SPACE_URL}`);
+  console.log(`[NOVEL2] RENDER_WEBHOOK = ${RENDER_WEBHOOK}`);
+  console.log(`[NOVEL2] targetUrl      = ${targetUrl}`);
+  console.log(`[NOVEL2] webhookUrl     = ${webhookUrl}`);
+
   try {
-    await axios.get(`${HF_SPACE_URL}/trigger-scrape`, {
+    const hfRes = await axios.get(`${HF_SPACE_URL}/trigger-scrape`, {
       params: { url: targetUrl, webhook: webhookUrl },
       timeout: 8000,
     });
-  } catch (_) {
+    console.log(`[NOVEL2] ✅ HF رد بـ: ${hfRes.status}`);
+  } catch (err) {
     // فشل الطلب → ننتقل للموقع التالي مباشرة
+    console.error(`[NOVEL2] ❌ فشل إرسال لـ HF: ${err.message}`);
     tryNextSite(sessionId);
   }
 }
