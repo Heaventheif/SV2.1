@@ -165,20 +165,40 @@ async function fetchFromFallback(site, novelName, chapterNum) {
   return result;
 }
 
-// ─── إنشاء ملف مؤقت وإرساله كملف في المسنجر ─────────────────
-async function sendAsFile(api, threadID, messageID, novelName, chapterNum, title, chapterTitle, siteName, translated) {
-  const divider = "─".repeat(35);
-  const header = [
-    `📖 ${title}`,
-    `📄 ${chapterTitle}`,
-    `🌐 ${siteName}`,
-    divider,
-    "",
-  ].join("\n");
+// ─── تقسيم النص لأجزاء ───────────────────────────────────────
+function splitMessage(text, maxLen = 8000) {
+  const chunks = [];
+  let current = "";
+  for (const para of text.split("\n\n")) {
+    if ((current + para + "\n\n").length > maxLen) {
+      if (current.trim()) chunks.push(current.trim());
+      current = para + "\n\n";
+    } else {
+      current += para + "\n\n";
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks.length > 0 ? chunks : [text];
+}
 
+// ─── إرسال كرسائل مقطعة ──────────────────────────────────────
+async function sendAsChunks(api, threadID, messageID, header, translated, divider) {
+  const fullText = header + translated.join("\n\n");
+  const chunks = splitMessage(fullText);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const suffix = chunks.length > 1 ? `\n\n${divider}\n📌 ${i + 1} / ${chunks.length}` : "";
+    const body = chunks[i] + suffix;
+    await new Promise(r => setTimeout(r, 800));
+    await new Promise((resolve, reject) =>
+      api.sendMessage(body, threadID, (err, info) => err ? reject(err) : resolve(info), messageID)
+    );
+  }
+}
+
+// ─── إرسال كملف .txt ─────────────────────────────────────────
+async function sendAsFile(api, threadID, messageID, novelName, chapterNum, header, translated) {
   const content = header + translated.join("\n\n");
-
-  // اسم الملف: اسم الرواية + رقم الفصل بالإنجليزي
   const safeNovel = novelName.replace(/[^a-zA-Z0-9 _-]/g, "").trim().replace(/\s+/g, "_");
   const fileName = `${safeNovel}_Ch${chapterNum}.txt`;
   const tmpPath = path.join(os.tmpdir(), fileName);
@@ -187,10 +207,7 @@ async function sendAsFile(api, threadID, messageID, novelName, chapterNum, title
 
   return new Promise((resolve, reject) => {
     api.sendMessage(
-      {
-        body: "",
-        attachment: fs.createReadStream(tmpPath),
-      },
+      { body: "", attachment: fs.createReadStream(tmpPath) },
       threadID,
       (err, info) => {
         try { fs.unlinkSync(tmpPath); } catch (_) {}
@@ -206,7 +223,7 @@ module.exports = {
   config: {
     name: "novel",
     aliases: ["رواية", "فصل", "read"],
-    version: "9.0.0",
+    version: "9.1.0",
     author: "Sunken",
     countDown: 20,
     role: 0,
@@ -228,7 +245,8 @@ module.exports = {
         "  .novel kingdom's bloodline 627\n\n" +
         "🌐 المصادر:\n" +
         "  ① AllNovelFull ② NovelFull ③ NovelFire\n\n" +
-        "🔄 الترجمة تلقائية للعربية — يُرسل كملف كامل",
+        "🔄 الترجمة تلقائية للعربية\n" +
+        "📨 يُرسل كرسائل مقطعة + ملف .txt",
         threadID, null, messageID
       );
     }
@@ -289,16 +307,23 @@ module.exports = {
     await updateStatus(`🔄 ترجمة ${result.paragraphs.length} فقرة...\n📖 ${result.title}\n🌐 ${result.siteName}`);
     const translated = await translateBatch(result.paragraphs);
 
-    // حذف رسالة الحالة وإرسال الملف
+    const divider = "─".repeat(35);
+    const chapterLabel = result.chapterTitle || `الفصل ${chapterNum}`;
+    const header = `📖 ${result.title}\n📄 ${chapterLabel}\n🌐 ${result.siteName}\n${divider}\n\n`;
+
+    // حذف رسالة الحالة
     try { if (statusMsgId) await api.unsendMessage(statusMsgId); } catch (_) {}
 
+    // ① إرسال كرسائل مقطعة أولاً
     try {
-      await sendAsFile(
-        api, threadID, messageID,
-        novelName, chapterNum,
-        result.title, result.chapterTitle || `الفصل ${chapterNum}`,
-        result.siteName, translated
-      );
+      await sendAsChunks(api, threadID, messageID, header, translated, divider);
+    } catch (err) {
+      console.error("[NOVEL] فشل إرسال الرسائل:", err.message);
+    }
+
+    // ② ثم إرسال كملف .txt
+    try {
+      await sendAsFile(api, threadID, messageID, novelName, chapterNum, header, translated);
     } catch (err) {
       console.error("[NOVEL] فشل إرسال الملف:", err.message);
       api.sendMessage(`❌ فشل إرسال الملف: ${err.message}`, threadID, null, messageID);
