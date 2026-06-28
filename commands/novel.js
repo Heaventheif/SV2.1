@@ -82,12 +82,14 @@ const FALLBACK_SITES = [
   },
   // ─── المواقع الجديدة ───────────────────────────────────────────
   {
-    // WuxiaBox: https://www.wuxiabox.com/novel/{slug}_{ch}.html
+    // WuxiaBox: يستخدم رقم ID داخلي للرواية (مثل 6926877) وليس slug نصي
+    // البنية: https://www.wuxiabox.com/novel/{novelID}_{chapterNum}.html
+    // نجلب ID الرواية عبر البحث أولاً
     name: "WuxiaBox",
-    buildUrl: (slug, ch) => `https://www.wuxiabox.com/novel/${slug}_${ch}.html`,
-    selectors: ["article#chapter-article .chapter-content", "div.chapter-content", ".page-in .chapter-content"],
-    titleSel: [".truyen-title", "h1.chapter-title", "title"],
-    slugify: (n) => n.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+    buildUrl: (novelID, ch) => `https://www.wuxiabox.com/novel/${novelID}_${ch}.html`,
+    selectors: ["article#chapter-article", "div.chapter-content", ".page-in"],
+    titleSel: [".truyen-title", "h1", "title"],
+    slugify: (n) => n, // نُمرر novelName كما هو، سيُستبدل بالـ ID في fetchFromFallback
     buildChapter: (ch) => String(ch),
   },
   {
@@ -295,6 +297,46 @@ function extractContent($, selectors) {
   return paras.length > 0 ? paras : null;
 }
 
+// ─── WuxiaBox: جلب ID الرواية عبر البحث ────────────────────────
+// WuxiaBox يستخدم رقم ID رقمي للرواية في الرابط (مثل 6926877)
+// نبحث عنه في صفحة البحث أولاً ثم نبني رابط الفصل مباشرة
+const wuxiaBoxIDCache = new Map(); // كاش مستقل لتجنب إعادة البحث عن نفس الرواية
+
+async function resolveWuxiaBoxID(novelName) {
+  const key = novelName.toLowerCase().trim();
+  if (wuxiaBoxIDCache.has(key)) return wuxiaBoxIDCache.get(key);
+
+  const searchQuery = encodeURIComponent(novelName);
+  const searchUrl = `https://www.wuxiabox.com/search?q=${searchQuery}`;
+
+  try {
+    const html = await fetchHTML(searchUrl);
+    const $ = cheerio.load(html);
+
+    // روابط نتائج البحث تكون بالشكل: /novel/6926877-kingdom-bloodline.html أو /novel/6926877_1.html
+    let novelID = null;
+
+    $("a[href*='/novel/']").each((_, el) => {
+      const href = $(el).attr("href") || "";
+      // استخراج الرقم من بداية اسم الملف: /novel/1234567-...  أو  /novel/1234567_
+      const match = href.match(/\/novel\/(\d{5,})[_-]/);
+      if (match) {
+        novelID = match[1];
+        return false; // توقف عند أول نتيجة
+      }
+    });
+
+    if (novelID) {
+      console.log(`[WuxiaBox] ID الرواية "${novelName}" = ${novelID}`);
+      wuxiaBoxIDCache.set(key, novelID);
+      return novelID;
+    }
+  } catch (e) {
+    console.warn(`[WuxiaBox] فشل البحث: ${e.message}`);
+  }
+  return null;
+}
+
 async function fetchFromFallback(site, novelName, chapterNum) {
   const cacheKey = `${site.name}:${novelName}:${chapterNum}`;
   const cached = cacheGet(cacheKey);
@@ -303,10 +345,21 @@ async function fetchFromFallback(site, novelName, chapterNum) {
   const slug = site.slugify(novelName);
   if (!slug) throw new Error("اسم الرواية غير صالح بعد التحويل لرابط");
 
-  const url = site.buildUrl(slug, site.buildChapter(chapterNum));
+  let html, $, url;
 
-  const html = await fetchHTML(url);
-  const $ = cheerio.load(html);
+  // WuxiaBox يستخدم ID رقمي للرواية → نبحث عنه أولاً ثم نبني الرابط مباشرة
+  if (site.name === "WuxiaBox") {
+    const novelID = await resolveWuxiaBoxID(novelName);
+    if (!novelID) throw new Error(`WuxiaBox: لم يُعثر على ID الرواية "${novelName}" في نتائج البحث`);
+    url = `https://www.wuxiabox.com/novel/${novelID}_${chapterNum}.html`;
+    html = await fetchHTML(url);
+    $ = cheerio.load(html);
+  } else {
+    url = site.buildUrl(slug, site.buildChapter(chapterNum));
+    html = await fetchHTML(url);
+    $ = cheerio.load(html);
+  }
+
   const paragraphs = extractContent($, site.selectors);
   if (!paragraphs || paragraphs.length < 2) throw new Error(`محتوى فارغ (${paragraphs?.length || 0} فقرة)`);
 
