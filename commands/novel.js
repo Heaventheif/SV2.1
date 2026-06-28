@@ -65,16 +65,20 @@ const FALLBACK_SITES = [
     buildChapter: (ch) => String(ch),
   },
   {
+    // NovelFull: يكتب عنوان الفصل في الرابط أيضاً مثل:
+    // /kingdoms-bloodline/chapter-100-ramon-one.html
+    // لذا نجلب صفحة الفهرس ونبحث فيها عن رابط الفصل الصحيح
     name: "NovelFull",
-    buildUrl: (slug, ch) => `https://novelfull.com/${slug}/chapter-${ch}.html`,
+    indexUrl: (slug) => `https://novelfull.com/${slug}.html`,
     selectors: ["#chapter-content", ".chapter-content", ".text-left"],
     titleSel: [".truyen-title", "h3.title", "title"],
-    slugify: (n) => n.toLowerCase().replace(/'/g, " ").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+    slugify: (n) => n.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
     buildChapter: (ch) => String(ch),
   },
   {
+    // NovelFire: المسار الصحيح /book/ وليس /novel/
     name: "NovelFire",
-    buildUrl: (slug, ch) => `https://novelfire.net/novel/${slug}/chapter-${ch}`,
+    buildUrl: (slug, ch) => `https://novelfire.net/book/${slug}/chapter-${ch}`,
     selectors: [".chapter-content", "#chapter-content", ".novel-body", ".text-content"],
     titleSel: [".novel-title", "h1.title", ".book-name", "title"],
     slugify: (n) => n.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
@@ -83,31 +87,11 @@ const FALLBACK_SITES = [
   // ─── المواقع الجديدة ───────────────────────────────────────────
   {
     // WuxiaBox: يستخدم رقم ID داخلي للرواية (مثل 6926877) وليس slug نصي
-    // البنية: https://www.wuxiabox.com/novel/{novelID}_{chapterNum}.html
-    // نجلب ID الرواية عبر البحث أولاً
     name: "WuxiaBox",
     buildUrl: (novelID, ch) => `https://www.wuxiabox.com/novel/${novelID}_${ch}.html`,
     selectors: ["article#chapter-article", "div.chapter-content", ".page-in"],
     titleSel: [".truyen-title", "h1", "title"],
-    slugify: (n) => n, // نُمرر novelName كما هو، سيُستبدل بالـ ID في fetchFromFallback
-    buildChapter: (ch) => String(ch),
-  },
-  {
-    // LNMTL: https://lnmtl.com/chapter/{slug}-chapter-{ch}
-    name: "LNMTL",
-    buildUrl: (slug, ch) => `https://lnmtl.com/chapter/${slug}-chapter-${ch}`,
-    selectors: ["div#chapter-container", ".chapter-container", ".chapter-body"],
-    titleSel: [".chapter-title", "h1", "title"],
-    slugify: (n) => n.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
-    buildChapter: (ch) => String(ch),
-  },
-  {
-    // NovelLive: https://novellive.app/book/{slug}/chapter-{ch}
-    name: "NovelLive",
-    buildUrl: (slug, ch) => `https://novellive.app/book/${slug}/chapter-${ch}`,
-    selectors: ["div#main1 .m-read .wp", "div.wp", ".m-read .wp"],
-    titleSel: [".book-name", "h1.title", "title"],
-    slugify: (n) => n.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+    slugify: (n) => n,
     buildChapter: (ch) => String(ch),
   },
   {
@@ -120,9 +104,10 @@ const FALLBACK_SITES = [
     buildChapter: (ch) => String(ch),
   },
   {
-    // NovelCrest: https://www.novelcrest.com/book/{slug}-2/{ch}.html
+    // NovelCrest: بعض الروايات لها لاحقة -2 في الرابط
     name: "NovelCrest",
-    buildUrl: (slug, ch) => `https://www.novelcrest.com/book/${slug}-2/${ch}.html`,
+    buildUrl: (slug, ch) => `https://www.novelcrest.com/book/${slug}/${ch}.html`,
+    buildUrlAlt: (slug, ch) => `https://www.novelcrest.com/book/${slug}-2/${ch}.html`,
     selectors: ["div#chr-content", ".chr-c", "#chr-content"],
     titleSel: [".chr-title", "h1", "title"],
     slugify: (n) => n.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
@@ -297,43 +282,60 @@ function extractContent($, selectors) {
   return paras.length > 0 ? paras : null;
 }
 
-// ─── WuxiaBox: جلب ID الرواية عبر البحث ────────────────────────
-// WuxiaBox يستخدم رقم ID رقمي للرواية في الرابط (مثل 6926877)
-// نبحث عنه في صفحة البحث أولاً ثم نبني رابط الفصل مباشرة
-const wuxiaBoxIDCache = new Map(); // كاش مستقل لتجنب إعادة البحث عن نفس الرواية
+// ─── WuxiaBox: بناء مباشر + تحقق سريع ─────────────────────────
+// الرابط: /novel/{ID}_{ch}.html حيث ID = رقم + slug نصي أحياناً
+// من الصورة رأينا: 6926877_660 → الـ ID الرقمي ثابت لكل رواية
+// نستخرجه مرة واحدة من صفحة الرواية ونخزنه في كاش
+const wuxiaBoxIDCache = new Map();
 
 async function resolveWuxiaBoxID(novelName) {
   const key = novelName.toLowerCase().trim();
   if (wuxiaBoxIDCache.has(key)) return wuxiaBoxIDCache.get(key);
 
-  const searchQuery = encodeURIComponent(novelName);
-  const searchUrl = `https://www.wuxiabox.com/search?q=${searchQuery}`;
+  // جرّب عدة صيغ للبحث
+  const slug = novelName.toLowerCase().replace(/'/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const searchUrls = [
+    `https://www.wuxiabox.com/search?q=${encodeURIComponent(novelName)}`,
+    `https://www.wuxiabox.com/search?q=${encodeURIComponent(slug)}`,
+  ];
 
-  try {
-    const html = await fetchHTML(searchUrl);
-    const $ = cheerio.load(html);
-
-    // روابط نتائج البحث تكون بالشكل: /novel/6926877-kingdom-bloodline.html أو /novel/6926877_1.html
-    let novelID = null;
-
-    $("a[href*='/novel/']").each((_, el) => {
-      const href = $(el).attr("href") || "";
-      // استخراج الرقم من بداية اسم الملف: /novel/1234567-...  أو  /novel/1234567_
-      const match = href.match(/\/novel\/(\d{5,})[_-]/);
-      if (match) {
-        novelID = match[1];
-        return false; // توقف عند أول نتيجة
+  for (const searchUrl of searchUrls) {
+    try {
+      const html = await fetchHTML(searchUrl);
+      const $ = cheerio.load(html);
+      let novelID = null;
+      $("a[href*='/novel/']").each((_, el) => {
+        const href = $(el).attr("href") || "";
+        // الرابط يكون: /novel/6926877_1.html أو /novel/6926877-kingdoms-bloodline.html
+        const match = href.match(/\/novel\/(\d{4,})[_-]/);
+        if (match) { novelID = match[1]; return false; }
+      });
+      if (novelID) {
+        console.log(`[WuxiaBox] ID="${novelID}" للرواية "${novelName}"`);
+        wuxiaBoxIDCache.set(key, novelID);
+        return novelID;
       }
-    });
+    } catch (_) {}
+  }
 
+  // إذا فشل البحث، جرّب صفحة الرواية مباشرة بالـ slug (بعض الروايات لها صفحة مباشرة)
+  try {
+    const directUrl = `https://www.wuxiabox.com/novel/${slug}.html`;
+    const html = await fetchHTML(directUrl);
+    const $ = cheerio.load(html);
+    // استخرج الـ ID من روابط الفصول في الصفحة
+    let novelID = null;
+    $("a[href*='_']").each((_, el) => {
+      const href = $(el).attr("href") || "";
+      const match = href.match(/\/novel\/(\d{4,})_\d+\.html/);
+      if (match) { novelID = match[1]; return false; }
+    });
     if (novelID) {
-      console.log(`[WuxiaBox] ID الرواية "${novelName}" = ${novelID}`);
       wuxiaBoxIDCache.set(key, novelID);
       return novelID;
     }
-  } catch (e) {
-    console.warn(`[WuxiaBox] فشل البحث: ${e.message}`);
-  }
+  } catch (_) {}
+
   return null;
 }
 
@@ -354,6 +356,60 @@ async function fetchFromFallback(site, novelName, chapterNum) {
     url = `https://www.wuxiabox.com/novel/${novelID}_${chapterNum}.html`;
     html = await fetchHTML(url);
     $ = cheerio.load(html);
+
+  } else if (site.name === "NovelFull") {
+    // NovelFull يضع عنوان الفصل في الرابط: /chapter-100-title-here.html
+    // نجلب صفحة الفهرس ونبحث فيها عن رابط الفصل الصحيح
+    const indexUrl = site.indexUrl(slug);
+    const indexHtml = await fetchHTML(indexUrl);
+    const $idx = cheerio.load(indexHtml);
+    // الفهرس يعرض الفصول كـ <a href="/slug/chapter-100-...html">
+    const chPattern = new RegExp(`/chapter-${chapterNum}[^"']*\\.html`, "i");
+    let chapterUrl = null;
+    $idx("a[href]").each((_, el) => {
+      const href = $idx(el).attr("href") || "";
+      if (chPattern.test(href)) {
+        chapterUrl = href.startsWith("http") ? href : `https://novelfull.com${href}`;
+        return false;
+      }
+    });
+    // إذا لم يجد في الصفحة الأولى، جرّب صفحات الفهرس التالية (page=1, page=2 ...)
+    if (!chapterUrl) {
+      for (let page = 1; page <= 5 && !chapterUrl; page++) {
+        try {
+          const pageHtml = await fetchHTML(`${indexUrl}?page=${page}`);
+          const $p = cheerio.load(pageHtml);
+          $p("a[href]").each((_, el) => {
+            const href = $p(el).attr("href") || "";
+            if (chPattern.test(href)) {
+              chapterUrl = href.startsWith("http") ? href : `https://novelfull.com${href}`;
+              return false;
+            }
+          });
+        } catch (_) {}
+      }
+    }
+    if (!chapterUrl) throw new Error(`NovelFull: لم يُعثر على رابط الفصل ${chapterNum} في الفهرس`);
+    url = chapterUrl;
+    html = await fetchHTML(url);
+    $ = cheerio.load(html);
+
+  } else if (site.name === "NovelCrest") {
+    // جرّب الرابط العادي أولاً، ثم مع لاحقة -2
+    url = site.buildUrl(slug, site.buildChapter(chapterNum));
+    try {
+      html = await fetchHTML(url);
+      $ = cheerio.load(html);
+      if (!extractContent($, site.selectors) && site.buildUrlAlt) {
+        throw new Error("محتوى فارغ، جرّب النسخة البديلة");
+      }
+    } catch (_) {
+      if (site.buildUrlAlt) {
+        url = site.buildUrlAlt(slug, site.buildChapter(chapterNum));
+        html = await fetchHTML(url);
+        $ = cheerio.load(html);
+      } else throw _;
+    }
   } else {
     url = site.buildUrl(slug, site.buildChapter(chapterNum));
     html = await fetchHTML(url);
@@ -447,10 +503,10 @@ module.exports = {
         "  .novel martial peak 1\n" +
         "  .novel solo leveling 100\n" +
         "  .novel kingdom's bloodline 627\n\n" +
-        "🌐 المصادر:\n" +
-        "  ① AllNovelFull ② NovelFull ③ NovelFire\n" +
-        "  ④ WuxiaBox ⑤ LNMTL ⑥ NovelLive\n" +
-        "  ⑦ INovelHub ⑧ NovelCrest\n\n" +
+        "🌐 المصادر (6 مواقع بالتوازي):\n" +
+        "  ① AllNovelFull ② NovelFull\n" +
+        "  ③ NovelFire ④ WuxiaBox\n" +
+        "  ⑤ INovelHub ⑥ NovelCrest\n\n" +
         "🔄 الترجمة تلقائية للعربية\n" +
         "📨 يُرسل كرسائل مقطعة + ملف .txt",
         threadID, null, messageID
@@ -492,17 +548,21 @@ module.exports = {
     // ─── تجريب كل المواقع بالتوازي (أول نجاح يكسب) مع سقف زمني إجمالي ───
     await updateStatus(`🔍 جلب من ${FALLBACK_SITES.length} مصادر بالتوازي...\n📖 ${novelName}\n📄 الفصل ${chapterNum}`);
 
-    const OVERALL_TIMEOUT = 25000;
+    const OVERALL_TIMEOUT = 30000; // 30 ثانية (WuxiaBox يحتاج طلبين، NovelFull يحتاج فهرس)
     const timeoutPromise = new Promise((_, reject) =>
       setTimeout(() => reject(new Error("انتهى الوقت المسموح (timeout)")), OVERALL_TIMEOUT)
     );
 
     let result = null;
     let cacheKeyUsed = null;
+    const siteErrors = {}; // تتبع أسباب فشل كل موقع
     try {
       const tasks = FALLBACK_SITES.map((site) => ({
         siteName: site.name,
-        promise: fetchFromFallback(site, novelName, chapterNum),
+        promise: fetchFromFallback(site, novelName, chapterNum).catch(err => {
+          siteErrors[site.name] = err.message?.substring(0, 80);
+          throw err;
+        }),
       }));
       const winner = await Promise.race([raceFirstSuccess(tasks), timeoutPromise]);
       result = winner.value;
@@ -513,9 +573,13 @@ module.exports = {
     }
 
     if (!result) {
+      const errorDetails = Object.entries(siteErrors)
+        .map(([site, err]) => `• ${site}: ${err}`)
+        .join("\n");
       const errMsg =
-        `❌ لم أجد الفصل في أي مصدر (أو استغرق وقتًا طويلًا)\n\n` +
-        `📖 ${novelName}\n📄 الفصل ${chapterNum}\n\n` +
+        `❌ لم أجد الفصل في أي مصدر\n\n` +
+        `📖 ${novelName} | 📄 الفصل ${chapterNum}\n\n` +
+        (errorDetails ? `🔍 تفاصيل الأخطاء:\n${errorDetails}\n\n` : "") +
         `💡 تأكد من:\n• الاسم الإنجليزي الصحيح\n• رقم الفصل صحيح`;
       try {
         if (statusMsgId) await api.editMessage(errMsg, statusMsgId);
