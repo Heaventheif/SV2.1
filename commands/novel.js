@@ -180,7 +180,7 @@ async function sendAsFile(api, threadID, messageID, novelName, chapterNum, title
 
   // اسم الملف: اسم الرواية + رقم الفصل بالإنجليزي
   const safeNovel = novelName.replace(/[^a-zA-Z0-9 _-]/g, "").trim().replace(/\s+/g, "_");
-  const fileName = `${safeNovel}_Ch${chapterNum}`;
+  const fileName = `${safeNovel}_Ch${chapterNum}.txt`;
   const tmpPath = path.join(os.tmpdir(), fileName);
 
   fs.writeFileSync(tmpPath, content, "utf8");
