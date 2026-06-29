@@ -21,17 +21,17 @@ function getApiKey() {
   return keys.length === 0 ? "FREE" : keys[Math.floor(Math.random() * keys.length)];
 }
 
-function getTempPath(senderID) {
-  return path.join(os.tmpdir(), `sing_${Date.now()}_${senderID}.mp3`);
+function getTempPath() {
+  return path.join(os.tmpdir(), `sing_${Date.now()}.mp3`);
 }
 
 function react(api, msgID, emoji) {
   try { api.setMessageReaction(emoji, msgID, () => {}, true); } catch (_) {}
 }
 
-// ── تحميل وإرسال أغنية ───────────────────────────────────────
+// ── تحميل وإرسال أغنية ────────────────────────────────────────
 async function downloadAndSend(api, threadID, messageID, originMsgID, track, statusMsgId = null) {
-  const filePath = getTempPath("dl");
+  const filePath = getTempPath();
   try {
     const dlRes = await axios.get('https://api.ferdev.my.id/downloader/soundcloud', {
       params: { link: track.url, apikey: getApiKey() },
@@ -45,17 +45,22 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track, sta
 
     if (!downloadUrl) throw new Error("لم يُرجع الـ API رابط تحميل.");
 
+    // ← stream مباشر للقرص بدل arraybuffer (أسرع وأقل ذاكرة)
     const streamRes = await axios({
-      url: downloadUrl, method: 'GET', responseType: 'arraybuffer',
-      timeout: 90000, maxContentLength: 26214400, maxBodyLength: 26214400,
+      url: downloadUrl, method: 'GET', responseType: 'stream',
+      timeout: 90000,
     });
 
-    const buffer = Buffer.from(streamRes.data);
-    if (!buffer.length)           throw new Error("الملف فارغ.");
-    if (buffer.length > 26214400) throw new Error("الملف أكبر من 25MB.");
+    await new Promise((resolve, reject) => {
+      const writer = fs.createWriteStream(filePath);
+      streamRes.data.pipe(writer);
+      writer.on("finish", resolve);
+      writer.on("error", reject);
+    });
 
-    await fs.writeFile(filePath, buffer);
-    if ((await fs.stat(filePath)).size === 0) throw new Error("الملف فارغ بعد الحفظ.");
+    const size = (await fs.stat(filePath)).size;
+    if (!size)           throw new Error("الملف فارغ.");
+    if (size > 26214400) throw new Error("الملف أكبر من 25MB.");
 
     await new Promise((resolve, reject) =>
       api.sendMessage(
@@ -66,9 +71,9 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track, sta
       )
     );
 
-    if (statusMsgId) { try { await api.unsendMessage(statusMsgId); } catch (_) {} }
+    if (statusMsgId) api.unsendMessage(statusMsgId).catch(() => {});
     if (originMsgID) react(api, originMsgID, "✅");
-    await sendMoodSticker(api, threadID, track.title);
+    sendMoodSticker(api, threadID); // fire-and-forget
 
   } catch (error) {
     if (originMsgID) react(api, originMsgID, "❌");
@@ -79,7 +84,7 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track, sta
     else                                      msg = "❌ فشل التحميل، قد يكون المحتوى محمياً.";
     api.sendMessage(msg, threadID, null, messageID);
   } finally {
-    try { if (await fs.pathExists(filePath)) await fs.remove(filePath); } catch (_) {}
+    fs.remove(filePath).catch(() => {});
   }
 }
 
@@ -87,7 +92,7 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track, sta
 module.exports = {
   config: {
     name:     "sing",
-    version:  "5.0.0",
+    version:  "5.1.0",
     countDown: 5,
     role:     0,
     description: "بحث وتحميل أغاني من SoundCloud — أضف s لعرض قائمة نتائج",
@@ -104,7 +109,6 @@ module.exports = {
     const TRIGGERS = ['sing ', 'mp3 ', 'song ', 'اغنية ', 'أغنية '];
     const trigger  = TRIGGERS.find(t => lower.startsWith(t));
     if (!trigger) {
-      // ── ردّ برقم على قائمة ──────────────────────────────────
       const session = global.soundcloudSearchSessions[senderID];
       if (session && /^\d+$/.test(lower)) {
         if (Date.now() - session.timestamp > 120000) {
@@ -164,13 +168,11 @@ module.exports = {
         return api.sendMessage("❌ فشل استخراج الروابط.", threadID, null, messageID);
       }
 
-      // ── مباشر: أول نتيجة ────────────────────────────────────
       if (!showList) {
         react(api, messageID, "✅");
         return await downloadAndSend(api, threadID, messageID, messageID, allTracks[0]);
       }
 
-      // ── قائمة ───────────────────────────────────────────────
       let msg = `🎵 نتائج البحث:\n${"─".repeat(22)}\n`;
       allTracks.forEach((t, i) => {
         msg += `${i + 1}. 📝 ${t.title}\n${"─".repeat(22)}\n`;

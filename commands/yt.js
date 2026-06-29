@@ -105,7 +105,7 @@ async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4, statusM
     );
 
     if (statusMsgId) { try { await api.unsendMessage(statusMsgId); } catch (_) {} }
-    if (!wantMp4) await sendMoodSticker(api, threadID, dl.title);
+    if (!wantMp4) sendMoodSticker(api, threadID); // fire-and-forget
 
   } catch (err) {
     let msg = err.message || "خطأ غير معروف";
