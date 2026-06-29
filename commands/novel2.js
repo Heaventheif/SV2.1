@@ -1,7 +1,4 @@
 const axios = require("axios");
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
 const { translateToArabic } = require("../utils/translator.js");
 
 // ─── رابط HF Space ────────────────────────────────────────────
@@ -133,12 +130,12 @@ async function fetchFromHF(novelName, chapterNum, preferredSite = null, novelId 
 
 // ─── إرسال ────────────────────────────────────────────────────
 const sendAsync = (api, body, tid, mid) =>
-  new Promise((res, rej) => api.sendMessage(body, tid, (e, i) => e ? rej(e) : res(i), mid));
+  new Promise((res, rej) => global.safeSend(api, body, tid, (e, i) => e ? rej(e) : res(i), mid));
 
 // نفس مشكلة novel.js: 8000 حرف أكبر من حد الرسالة الواحدة الفعلي،
 // فتفشل "الأجزاء" نفسها عند الإرسال. خُفِّض الحد وصار كل جزء مضمونًا
 // ألا يتجاوزه أبدًا (حتى الفقرة المفردة الطويلة جدًا تُقسَّم أولاً).
-const SAFE_MESSAGE_LEN = 1900;
+const SAFE_MESSAGE_LEN = 9000;
 
 function splitMessage(text, maxLen = SAFE_MESSAGE_LEN) {
   const chunks = []; let current = "";
@@ -155,19 +152,27 @@ function splitMessage(text, maxLen = SAFE_MESSAGE_LEN) {
   return chunks.length > 0 ? chunks : [text];
 }
 
-async function sendAsFile(api, tid, mid, novelName, chapterNum, header, translated) {
-  const content = header + translated.join("\n\n");
-  const safe = novelName.replace(/[^a-zA-Z0-9 _-]/g, "").trim().replace(/\s+/g, "_") || "novel";
-  const tmpPath = path.join(os.tmpdir(), `${safe}_Ch${chapterNum}.txt`);
-  fs.writeFileSync(tmpPath, content, "utf8");
-  try {
-    await sendAsync(api,
-      { body: `📖 الفصل ${chapterNum} كملف نصي`, attachment: fs.createReadStream(tmpPath) },
-      tid, mid
-    );
-  } finally {
-    try { fs.unlinkSync(tmpPath); } catch (_) {}
+// ─── التحقق من اكتمال الترجمة وإعادة ترجمة ما تبقى إنجليزياً ──
+async function verifyTranslation(paragraphs) {
+  const isEnglishHeavy = (text) => {
+    const total = text.replace(/\s/g, "").length;
+    if (total === 0) return false;
+    const arabicChars = (text.match(/[\u0600-\u06FF]/g) || []).length;
+    return (arabicChars / total) < 0.4;
+  };
+  const verified = [];
+  for (const para of paragraphs) {
+    if (isEnglishHeavy(para)) {
+      try {
+        const retried = await translateToArabic(para);
+        verified.push(retried || para);
+        console.log(`[VERIFY] أُعيدت ترجمة فقرة (${para.length} حرف)`);
+      } catch { verified.push(para); }
+    } else {
+      verified.push(para);
+    }
   }
+  return verified;
 }
 
 // ─── module ───────────────────────────────────────────────────
@@ -196,7 +201,7 @@ module.exports = {
     const { threadID, messageID } = event;
 
     if (args.length < 2) {
-      return api.sendMessage(
+      return global.safeSend(api, 
         "📚 قارئ الروايات (مواقع حديثة)\n\n" +
         "📝 الاستخدام:\n  .novel2 [اسم الرواية] [رقم الفصل]\n\n" +
         "💡 أمثلة:\n" +
@@ -231,7 +236,7 @@ module.exports = {
 
     const chArg = args_copy[args_copy.length - 1];
     if (isNaN(chArg) || Number(chArg) < 1) {
-      return api.sendMessage(
+      return global.safeSend(api, 
         "❌ يجب أن يكون ما قبل اسم الموقع رقم الفصل\n💡 مثال: .novel2 martial peak 3000",
         threadID, null, messageID
       );
@@ -240,7 +245,7 @@ module.exports = {
     const novelName = args_copy.slice(0, -1).join(" ").trim();
 
     if (!novelName) {
-      return api.sendMessage("❌ يجب كتابة اسم الرواية", threadID, null, messageID);
+      return global.safeSend(api, "❌ يجب كتابة اسم الرواية", threadID, null, messageID);
     }
 
     // رسالة الحالة
@@ -274,8 +279,8 @@ module.exports = {
           `${list}\n\n` +
           `💡 أعد إرسال الأمر مفرّقاً بإضافة id:<الرقم> في النهاية، مثال:\n` +
           `.novel2 ${novelName} ${chapterNum} id:${err.candidates[0]?.id || ""}`;
-        try { if (statusId) await api.editMessage(selectMsg, statusId); else api.sendMessage(selectMsg, threadID, null, messageID); }
-        catch (_) { api.sendMessage(selectMsg, threadID, null, messageID); }
+        try { if (statusId) await api.editMessage(selectMsg, statusId); else global.safeSend(api, selectMsg, threadID, null, messageID); }
+        catch (_) { global.safeSend(api, selectMsg, threadID, null, messageID); }
         return;
       }
       console.warn(`[NOVEL2] فشل: ${err.message}`);
@@ -284,8 +289,8 @@ module.exports = {
         `📖 ${novelName} | 📄 الفصل ${chapterNum}\n\n` +
         `${err.message}\n\n` +
         `💡 تأكد من:\n• الاسم الإنجليزي الصحيح\n• رقم الفصل موجود في الموقع`;
-      try { if (statusId) await api.editMessage(errMsg, statusId); else api.sendMessage(errMsg, threadID, null, messageID); }
-      catch (_) { api.sendMessage(errMsg, threadID, null, messageID); }
+      try { if (statusId) await api.editMessage(errMsg, statusId); else global.safeSend(api, errMsg, threadID, null, messageID); }
+      catch (_) { global.safeSend(api, errMsg, threadID, null, messageID); }
       return;
     }
 
@@ -293,17 +298,19 @@ module.exports = {
     const cacheKey = `${result.siteName}:${novelName}:${chapterNum}`;
     const translated = await translateBatchCached(cacheKey, result.paragraphs);
 
+    // ─── التحقق من اكتمال الترجمة ────────────────────────────
+    await updateStatus(`✅ التحقق من الترجمة...\n📖 ${result.title}`);
+    const verified = await verifyTranslation(translated);
+
     const divider = "─".repeat(35);
     const header = `📖 ${result.title}\n📄 ${result.chapterTitle}\n🌐 ${result.siteName}` +
       (result.wordCount ? ` (${result.wordCount} كلمة)` : "") +
       `\n${divider}\n\n`;
 
-    try { if (statusId) await api.unsendMessage(statusId); } catch (_) {}
+    try { if (statusId) await api.unsendMessage(statusId, threadID); } catch (_) {}
 
-    // ① إرسال كأجزاء مقطعة دائمًا — لا نجرب رسالة واحدة أبدًا.
-    // السبب: sendAsync لا يرفع خطأ عند رفض فيسبوك للرسالة الطويلة بصمت،
-    // فكنّا نعتقد أن الرسالة وُصِّلت ونتجاوز sendAsChunks تمامًا.
-    const fullText = header + translated.join("\n\n");
+    // إرسال كأجزاء مقطعة (9000 حرف/جزء)
+    const fullText = header + verified.join("\n\n");
     const chunks = splitMessage(fullText);
     for (let i = 0; i < chunks.length; i++) {
       await new Promise(r => setTimeout(r, 800));
@@ -313,13 +320,6 @@ module.exports = {
       } catch (err) {
         console.warn(`[NOVEL2] فشل إرسال الجزء ${i + 1}/${chunks.length}: ${err.message?.substring(0, 100)}`);
       }
-    }
-
-    // إرسال كملف
-    try {
-      await sendAsFile(api, threadID, messageID, novelName, chapterNum, header, translated);
-    } catch (err) {
-      api.sendMessage(`❌ فشل إرسال الملف: ${err.message}`, threadID, null, messageID);
     }
   }
 };

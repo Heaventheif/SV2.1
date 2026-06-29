@@ -1,8 +1,5 @@
 const axios = require("axios");
 const cheerio = require("cheerio");
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
 const { translateToArabic } = require("../utils/translator.js");
 
 const cache = new Map();
@@ -460,20 +457,6 @@ function splitMessage(text, maxLen = SAFE_MESSAGE_LEN) {
 }
 
 // ─── محاولة الإرسال كرسالة واحدة فقط ──────────────────────────
-// مسنجر قد يرفض الرسائل الطويلة جدًا (لا يوجد حد ثابت موثّق رسميًا
-// لكنه عمليًا يرفض النصوص الكبيرة جدًا)، لذا نحاول أولًا، وإن فشلت
-// المحاولة نرجع للتقسيم التقليدي بدل خسارة المحتوى بالكامل.
-async function trySendAsSingleMessage(api, threadID, messageID, header, translated) {
-  const fullText = header + translated.join("\n\n");
-  try {
-    await sendMessageAsync(api, fullText, threadID, messageID);
-    return true;
-  } catch (err) {
-    console.warn(`[NOVEL] فشل إرسال الفصل كرسالة واحدة (${fullText.length} حرف): ${err.message?.substring(0, 150)}`);
-    return false;
-  }
-}
-
 // ─── إرسال كرسائل مقطعة ──────────────────────────────────────
 // كل جزء يُرسل بمحاولة مستقلة: فشل جزء واحد (مثلاً لأنه ما زال
 // طويلاً جدًا لسبب ما) لا يجب أن يُسقط باقي الفصل، فنُكمل الباقي.
@@ -496,25 +479,31 @@ async function sendAsChunks(api, threadID, messageID, header, translated, divide
   return sentAny;
 }
 
-// ─── إرسال كملف .txt ─────────────────────────────────────────
-async function sendAsFile(api, threadID, messageID, novelName, chapterNum, header, translated) {
-  const content = header + translated.join("\n\n");
-  const safeNovel = novelName.replace(/[^a-zA-Z0-9 _-]/g, "").trim().replace(/\s+/g, "_") || "novel";
-  const fileName = `${safeNovel}_Ch${chapterNum}.txt`;
-  const tmpPath = path.join(os.tmpdir(), fileName);
+// ─── التحقق من اكتمال الترجمة وإعادة ترجمة ما تبقى إنجليزياً ──
+// تفحص كل فقرة: إذا كانت نسبة الحروف العربية أقل من 40% تُعاد ترجمتها
+async function verifyTranslation(paragraphs) {
+  const isEnglishHeavy = (text) => {
+    const total = text.replace(/\s/g, "").length;
+    if (total === 0) return false;
+    const arabicChars = (text.match(/[\u0600-\u06FF]/g) || []).length;
+    return (arabicChars / total) < 0.4;
+  };
 
-  fs.writeFileSync(tmpPath, content, "utf8"); // إذا فشل هنا، لا يوجد ملف لحذفه أصلاً
-
-  try {
-    return await sendMessageAsync(
-      api,
-      { body: `📖 تم تجهيز الفصل ${chapterNum} كملف نصي لسهولة القراءة.`, attachment: fs.createReadStream(tmpPath) },
-      threadID,
-      messageID
-    );
-  } finally {
-    try { fs.unlinkSync(tmpPath); } catch (_) {}
+  const verified = [];
+  for (const para of paragraphs) {
+    if (isEnglishHeavy(para)) {
+      try {
+        const retried = await translateToArabic(para);
+        verified.push(retried || para);
+        console.log(`[VERIFY] أُعيدت ترجمة فقرة (${para.length} حرف)`);
+      } catch {
+        verified.push(para);
+      }
+    } else {
+      verified.push(para);
+    }
   }
+  return verified;
 }
 
 module.exports = {
@@ -645,6 +634,10 @@ module.exports = {
     await updateStatus(`🔄 ترجمة ${result.paragraphs.length} فقرة...\n📖 ${result.title}\n🌐 ${result.siteName}`);
     const translated = await translateBatchCached(cacheKeyUsed, result.paragraphs);
 
+    // ─── التحقق من اكتمال الترجمة ────────────────────────────
+    await updateStatus(`✅ التحقق من الترجمة...\n📖 ${result.title}`);
+    const verified = await verifyTranslation(translated);
+
     const divider = "─".repeat(35);
     const chapterLabel = result.chapterTitle || `الفصل ${chapterNum}`;
     const header = `📖 ${result.title}\n📄 ${chapterLabel}\n🌐 ${result.siteName}\n${divider}\n\n`;
@@ -652,22 +645,11 @@ module.exports = {
     // حذف رسالة الحالة
     try { if (statusMsgId) await api.unsendMessage(statusMsgId, threadID); } catch (_) {}
 
-    // ① إرسال كأجزاء مقطعة دائمًا (9000 حرف/جزء)
-    // fca لا يرفع خطأ عند رفض فيسبوك للرسالة الطويلة بصمت،
-    // فكنّا نظن trySendAsSingle نجحت ونتجاوز sendAsChunks بالكامل.
-    // الحل: دائمًا sendAsChunks مباشرة.
+    // إرسال كأجزاء مقطعة (9000 حرف/جزء)
     try {
-      await sendAsChunks(api, threadID, messageID, header, translated, divider);
+      await sendAsChunks(api, threadID, messageID, header, verified, divider);
     } catch (err) {
       console.error("[NOVEL] فشل إرسال الرسائل المقطعة:", err.message);
-    }
-
-    // ② ثم إرسال كملف .txt
-    try {
-      await sendAsFile(api, threadID, messageID, novelName, chapterNum, header, translated);
-    } catch (err) {
-      console.error("[NOVEL] فشل إرسال الملف:", err.message);
-      global.safeSend(api, `❌ فشل إرسال الملف: ${err.message}`, threadID, null, messageID);
     }
   }
 };
