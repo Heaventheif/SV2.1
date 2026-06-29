@@ -13,7 +13,7 @@ const { sendMoodSticker } = require("../utils/danceSticker.js");
 const EMOJI_PAIRS = [
   ["👍", "❤️"], ["😆", "😮"], ["😢", "😡"],
   ["🥰", "👏"], ["🤩", "😘"], ["😍", "😭"],
-  ["🤔", "😅"], ["😁", "🥹"], ["🥸", "😎"], ["🙂", 😇"],
+  ["🤔", "😅"], ["😁", "🥹"], ["🥸", "😎"], ["🙂", "😇"],
 ];
 
 async function getStream(url) {
