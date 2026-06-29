@@ -433,15 +433,26 @@ async function fetchFromFallback(site, novelName, chapterNum) {
 }
 
 // ─── تقسيم النص لأجزاء ───────────────────────────────────────
-function splitMessage(text, maxLen = 8000) {
+// كان الحد القديم 8000 حرف، وهو أكبر من الحد الفعلي الذي يقبله
+// مسنجر لرسالة نصية واحدة، فكانت بعض "الأجزاء" نفسها تُرفض عند
+// الإرسال (وهنا يحدث الفشل الكامل في الفصول الطويلة). تم تخفيضه
+// لحد أكثر أمانًا (مع هامش لإضافة لاحقة رقم الجزء)، ومع ضمان أن
+// أي جزء لن يتجاوز الحد أبدًا حتى لو كانت فقرة واحدة بعد الترجمة
+// أطول من الحد بمفردها — تُقسَّم عند حدود الجمل بدل تركها كما هي.
+const SAFE_MESSAGE_LEN = 1900;
+
+function splitMessage(text, maxLen = SAFE_MESSAGE_LEN) {
   const chunks = [];
   let current = "";
   for (const para of text.split("\n\n")) {
-    if ((current + para + "\n\n").length > maxLen) {
-      if (current.trim()) chunks.push(current.trim());
-      current = para + "\n\n";
-    } else {
-      current += para + "\n\n";
+    const pieces = para.length > maxLen ? splitLongParagraph(para, maxLen) : [para];
+    for (const piece of pieces) {
+      if ((current + piece + "\n\n").length > maxLen) {
+        if (current.trim()) chunks.push(current.trim());
+        current = piece + "\n\n";
+      } else {
+        current += piece + "\n\n";
+      }
     }
   }
   if (current.trim()) chunks.push(current.trim());
@@ -464,16 +475,25 @@ async function trySendAsSingleMessage(api, threadID, messageID, header, translat
 }
 
 // ─── إرسال كرسائل مقطعة ──────────────────────────────────────
+// كل جزء يُرسل بمحاولة مستقلة: فشل جزء واحد (مثلاً لأنه ما زال
+// طويلاً جدًا لسبب ما) لا يجب أن يُسقط باقي الفصل، فنُكمل الباقي.
 async function sendAsChunks(api, threadID, messageID, header, translated, divider) {
   const fullText = header + translated.join("\n\n");
   const chunks = splitMessage(fullText);
 
+  let sentAny = false;
   for (let i = 0; i < chunks.length; i++) {
     const suffix = chunks.length > 1 ? `\n\n${divider}\n📌 ${i + 1} / ${chunks.length}` : "";
     const body = chunks[i] + suffix;
     await new Promise(r => setTimeout(r, 800));
-    await sendMessageAsync(api, body, threadID, messageID);
+    try {
+      await sendMessageAsync(api, body, threadID, messageID);
+      sentAny = true;
+    } catch (err) {
+      console.warn(`[NOVEL] فشل إرسال الجزء ${i + 1}/${chunks.length} (${body.length} حرف): ${err.message?.substring(0, 100)}`);
+    }
   }
+  return sentAny;
 }
 
 // ─── إرسال كملف .txt ─────────────────────────────────────────

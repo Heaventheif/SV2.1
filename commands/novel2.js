@@ -135,15 +135,23 @@ async function fetchFromHF(novelName, chapterNum, preferredSite = null, novelId 
 const sendAsync = (api, body, tid, mid) =>
   new Promise((res, rej) => api.sendMessage(body, tid, (e, i) => e ? rej(e) : res(i), mid));
 
-function splitMessage(text, maxLen = 8000) {
-  const chunks = []; let cur = "";
+// نفس مشكلة novel.js: 8000 حرف أكبر من حد الرسالة الواحدة الفعلي،
+// فتفشل "الأجزاء" نفسها عند الإرسال. خُفِّض الحد وصار كل جزء مضمونًا
+// ألا يتجاوزه أبدًا (حتى الفقرة المفردة الطويلة جدًا تُقسَّم أولاً).
+const SAFE_MESSAGE_LEN = 1900;
+
+function splitMessage(text, maxLen = SAFE_MESSAGE_LEN) {
+  const chunks = []; let current = "";
   for (const para of text.split("\n\n")) {
-    if ((cur + para + "\n\n").length > maxLen) {
-      if (cur.trim()) chunks.push(cur.trim());
-      cur = para + "\n\n";
-    } else cur += para + "\n\n";
+    const pieces = para.length > maxLen ? splitLongParagraph(para, maxLen) : [para];
+    for (const piece of pieces) {
+      if ((current + piece + "\n\n").length > maxLen) {
+        if (current.trim()) chunks.push(current.trim());
+        current = piece + "\n\n";
+      } else current += piece + "\n\n";
+    }
   }
-  if (cur.trim()) chunks.push(cur.trim());
+  if (current.trim()) chunks.push(current.trim());
   return chunks.length > 0 ? chunks : [text];
 }
 
@@ -293,6 +301,9 @@ module.exports = {
     try { if (statusId) await api.unsendMessage(statusId); } catch (_) {}
 
     // إرسال كرسالة واحدة أو مقطعة
+    // ملاحظة مهمة: كل جزء يُرسل بمحاولة مستقلة (try/catch خاص به)،
+    // لأن فشل جزء واحد بدون هذا كان يُسقط الـ promise كاملاً قبل
+    // الوصول لكود إرسال الملف بالأسفل — فيخسر المستخدم الرسالة والملف معًا.
     const fullText = header + translated.join("\n\n");
     try {
       await sendAsync(api, fullText, threadID, messageID);
@@ -301,7 +312,11 @@ module.exports = {
       for (let i = 0; i < chunks.length; i++) {
         await new Promise(r => setTimeout(r, 800));
         const suffix = chunks.length > 1 ? `\n\n${divider}\n📌 ${i + 1} / ${chunks.length}` : "";
-        await sendAsync(api, chunks[i] + suffix, threadID, messageID);
+        try {
+          await sendAsync(api, chunks[i] + suffix, threadID, messageID);
+        } catch (err) {
+          console.warn(`[NOVEL2] فشل إرسال الجزء ${i + 1}/${chunks.length}: ${err.message?.substring(0, 100)}`);
+        }
       }
     }
 
