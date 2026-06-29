@@ -15,10 +15,12 @@ const BROWSER_HEADERS = {
   "Accept-Language": "en-US,en;q=0.9",
 };
 
-// ── كاش client_id: مدة 12 ساعة بدل 6، ونجدد في الخلفية قبل انتهائه ──
+// إيموجي لكل نتيجة (بدل الأرقام)
+const TRACK_EMOJIS = ["👍", "❤️","😆","😮","😢", "😡","🥰","🤩"];
+
 let _clientId  = null;
 let _clientExp = 0;
-let _refreshing = false; // منع التجديد المتزامن
+let _refreshing = false;
 
 async function fetchClientId() {
   const page = await axios.get("https://soundcloud.com", {
@@ -45,37 +47,25 @@ async function fetchClientId() {
 
 async function getClientId() {
   const now = Date.now();
-
-  // إذا الكاش صالح → ارجعه فوراً
   if (_clientId && now < _clientExp) return _clientId;
-
-  // إذا الكاش قارب الانتهاء (أقل من ساعة) → جدد في الخلفية وارجع القديم
   if (_clientId && now < _clientExp + 60 * 60 * 1000 && !_refreshing) {
     _refreshing = true;
     fetchClientId()
-      .then(id => {
-        _clientId  = id;
-        _clientExp = Date.now() + 12 * 60 * 60 * 1000;
-      })
+      .then(id => { _clientId = id; _clientExp = Date.now() + 12 * 60 * 60 * 1000; })
       .catch(() => {})
       .finally(() => { _refreshing = false; });
     return _clientId;
   }
-
-  // أول مرة أو انتهى الكاش كلياً → انتظر
   const id = await fetchClientId();
   _clientId  = id;
   _clientExp = Date.now() + 12 * 60 * 60 * 1000;
   return _clientId;
 }
 
-// جلب client_id مسبقاً عند تشغيل البوت
 getClientId().catch(() => {});
 
-// ── جلب قائمة نتائج ───────────────────────────────────────────
 async function searchTracks(query, limit = 7) {
   const client_id = await getClientId();
-
   const res = await axios.get("https://api-v2.soundcloud.com/search/tracks", {
     params: {
       q: query, client_id, limit,
@@ -85,13 +75,11 @@ async function searchTracks(query, limit = 7) {
     headers: BROWSER_HEADERS,
     timeout: 15000,
   });
-
   const tracks = res.data?.collection;
   if (!tracks?.length) throw new Error("لم تُوجد نتائج على SoundCloud");
   return tracks;
 }
 
-// ── تحويل track إلى ملف mp3 ───────────────────────────────────
 async function streamTrack(track) {
   const client_id    = await getClientId();
   const transcodings = track.media?.transcodings ?? [];
@@ -115,7 +103,6 @@ async function streamTrack(track) {
 
   const filePath = path.join(os.tmpdir(), `sc_${Date.now()}.mp3`);
 
-  // ← تحميل مباشر كـ stream إلى القرص بدل arraybuffer (أسرع للملفات الكبيرة)
   const dlRes = await axios.get(streamUrl, {
     responseType: "stream",
     headers:      BROWSER_HEADERS,
@@ -151,8 +138,8 @@ async function cleanTemp(p) {
   try { await fs.remove(p); } catch (_) {}
 }
 
-// ── إرسال مقطع صوت ───────────────────────────────────────────
-async function sendTrack(api, threadID, messageID, track, statusMsgId = null) {
+// بدون رسالة "جارٍ التحميل" — يحذف القائمة بعد الإرسال
+async function sendTrack(api, threadID, messageID, track, listMsgId = null) {
   let filePath = null;
   try {
     const result = await streamTrack(track);
@@ -173,20 +160,18 @@ async function sendTrack(api, threadID, messageID, track, statusMsgId = null) {
       )
     );
 
-    // حذف رسالة الانتظار + ستيكر في الخلفية (لا يحجبان)
-    if (statusMsgId) api.unsendMessage(statusMsgId).catch(() => {});
-    sendMoodSticker(api, threadID); // fire-and-forget
+    if (listMsgId) { try { await api.unsendMessage(listMsgId); } catch (_) {} }
+    sendMoodSticker(api, threadID);
   } finally {
     if (filePath) cleanTemp(filePath);
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
 module.exports = {
   config: {
     name:        "sc",
     aliases:     ["بريفيو", "مقطع"],
-    version:     "5.1",
+    version:     "5.2",
     role:        0,
     countDown:   10,
     category:    "media",
@@ -217,27 +202,35 @@ module.exports = {
       const tracks = await searchTracks(query, showList ? 7 : 1);
 
       if (showList) {
+        const list = tracks.slice(0, 7);
         let text = `🎵 نتائج البحث في SoundCloud:\n${"─".repeat(22)}\n`;
-        tracks.slice(0, 7).forEach((t, i) => {
+        list.forEach((t, i) => {
           const dur = t.full_duration || t.duration || 0;
-          text += `${i + 1}. ${t.title || "بدون عنوان"}\n`;
+          text += `${TRACK_EMOJIS[i]} ${t.title || "بدون عنوان"}\n`;
           text += `   👤 ${t.user?.username || ""} ${dur ? fmtDuration(dur) : ""}\n`;
           text += `${"─".repeat(22)}\n`;
         });
-        text += `🔢 أرسل رقم الأغنية للتشغيل\n⏳ تنتهي بعد دقيقتين`;
+        text += `تفاعل بالإيموجي لاختيار الأغنية\n⏳ تنتهي بعد دقيقتين`;
 
         const sent = await new Promise((res, rej) =>
           api.sendMessage(text, threadID, (err, info) => err ? rej(err) : res(info), messageID)
         );
 
-        if (sent?.messageID && global.Kagenou?.replies) {
-          global.Kagenou.replies[sent.messageID] = {
-            commandName: "sc",
-            author:      event.senderID,
-            tracks:      tracks.slice(0, 7),
-            statusMsgId: sent.messageID,
-            timestamp:   Date.now(),
+        if (sent?.messageID && global.client?.reactionListener) {
+          global.client.reactionListener[sent.messageID] = {
+            author: event.senderID,
+            callback: async ({ api, event: re }) => {
+              const idx = TRACK_EMOJIS.indexOf(re.reaction);
+              if (idx === -1 || idx >= list.length) return;
+
+              delete global.client.reactionListener[sent.messageID];
+
+              await sendTrack(api, threadID, messageID, list[idx], sent.messageID);
+            },
           };
+          setTimeout(() => {
+            delete global.client?.reactionListener?.[sent.messageID];
+          }, 120000);
         }
         return;
       }
@@ -247,27 +240,6 @@ module.exports = {
     } catch (err) {
       console.error("[sc] خطأ:", err.message);
       api.sendMessage(`❌ ${err.message?.substring(0, 200) || "خطأ غير معروف"}`, threadID, null, messageID);
-    }
-  },
-
-  onReply: async ({ api, event, Reply }) => {
-    if (!Reply?.tracks || event.senderID !== Reply.author) return;
-
-    const { threadID, messageID } = event;
-    const idx = parseInt(event.body?.trim()) - 1;
-
-    if (isNaN(idx) || idx < 0 || idx >= Reply.tracks.length)
-      return api.sendMessage(`❌ أرسل رقماً من 1 إلى ${Reply.tracks.length}`, threadID);
-
-    if (global.Kagenou?.replies?.[Reply.statusMsgId])
-      delete global.Kagenou.replies[Reply.statusMsgId];
-
-    const listMsgId = Reply.statusMsgId;
-    api.editMessage(`⏳ جارٍ تحميل: ${Reply.tracks[idx].title || ""}...`, listMsgId).catch(() => {});
-    try {
-      await sendTrack(api, threadID, messageID, Reply.tracks[idx], listMsgId);
-    } catch (err) {
-      api.sendMessage(`❌ ${err.message?.substring(0, 200)}`, threadID, null, messageID);
     }
   },
 };

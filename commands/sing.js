@@ -16,6 +16,9 @@ if (!global.__singCleanupRegistered) {
   }, 60000);
 }
 
+// إيموجي لكل نتيجة (بدل الأرقام)
+const TRACK_EMOJIS = ["👍", "❤️","😆","😮","😢", "😡","🥰","🤩"]
+
 function getApiKey() {
   const keys = [process.env.FERDEV_API_KEY, process.env.FERDEV_API_KEY2, process.env.FERDEV_API_KEY3].filter(Boolean);
   return keys.length === 0 ? "FREE" : keys[Math.floor(Math.random() * keys.length)];
@@ -26,11 +29,14 @@ function getTempPath() {
 }
 
 function react(api, msgID, threadID, emoji) {
-  try { if (msgID && threadID) api.setMessageReaction({ reaction: String(emoji), messageID: String(msgID), threadID: String(threadID) }, () => {}); } catch (_) {}
+  try {
+    if (!msgID || !threadID) return;
+    api.setMessageReaction(emoji, msgID, threadID, () => {}, true);
+  } catch (_) {}
 }
 
-// ── تحميل وإرسال أغنية ────────────────────────────────────────
-async function downloadAndSend(api, threadID, messageID, originMsgID, track, statusMsgId = null) {
+// بدون رسالة "جارٍ التحميل" — يحذف القائمة بعد الإرسال
+async function downloadAndSend(api, threadID, messageID, originMsgID, track, listMsgId = null) {
   const filePath = getTempPath();
   try {
     const dlRes = await axios.get('https://api.ferdev.my.id/downloader/soundcloud', {
@@ -45,7 +51,6 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track, sta
 
     if (!downloadUrl) throw new Error("لم يُرجع الـ API رابط تحميل.");
 
-    // ← stream مباشر للقرص بدل arraybuffer (أسرع وأقل ذاكرة)
     const streamRes = await axios({
       url: downloadUrl, method: 'GET', responseType: 'stream',
       timeout: 90000,
@@ -71,9 +76,9 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track, sta
       )
     );
 
-    if (statusMsgId) api.unsendMessage(statusMsgId).catch(() => {});
+    if (listMsgId) { try { await api.unsendMessage(listMsgId); } catch (_) {} }
     if (originMsgID) react(api, originMsgID, threadID, "✅");
-    sendMoodSticker(api, threadID); // fire-and-forget
+    sendMoodSticker(api, threadID);
 
   } catch (error) {
     if (originMsgID) react(api, originMsgID, threadID, "❌");
@@ -88,11 +93,10 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track, sta
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
 module.exports = {
   config: {
     name:     "sing",
-    version:  "5.1.0",
+    version:  "5.2.0",
     countDown: 5,
     role:     0,
     description: "بحث وتحميل أغاني من SoundCloud — أضف s لعرض قائمة نتائج",
@@ -108,32 +112,28 @@ module.exports = {
     const lower   = trimmed.toLowerCase();
     const TRIGGERS = ['sing ', 'mp3 ', 'song ', 'اغنية ', 'أغنية '];
     const trigger  = TRIGGERS.find(t => lower.startsWith(t));
+
     if (!trigger) {
+      // اختيار من قائمة بالإيموجي
       const session = global.soundcloudSearchSessions[senderID];
-      if (session && /^\d+$/.test(lower)) {
-        if (Date.now() - session.timestamp > 120000) {
-          delete global.soundcloudSearchSessions[senderID];
-          return message.reply("⏳ انتهت الجلسة، ابحث مجدداً.");
-        }
-        const index = parseInt(lower) - 1;
-        if (index < 0 || index >= session.results.length)
-          return message.reply(`❌ اختر رقماً من 1 إلى ${session.results.length}`);
+      if (!session) return;
 
-        const chosenTrack = session.results[index];
-        const originMsgID = session.originMsgID;
+      const idx = TRACK_EMOJIS.indexOf(trimmed.trim());
+      if (idx === -1) return;
+
+      if (Date.now() - session.timestamp > 120000) {
         delete global.soundcloudSearchSessions[senderID];
-
-        if (originMsgID) react(api, originMsgID, threadID, "🤖");
-        let stMsgId3 = null;
-        try {
-          const st3 = await new Promise((res, rej) =>
-            api.sendMessage(`⏳ جارٍ تحميل: ${chosenTrack.title || ""}...`,
-              threadID, (err, info) => err ? rej(err) : res(info), messageID)
-          );
-          stMsgId3 = st3?.messageID;
-        } catch (_) {}
-        await downloadAndSend(api, threadID, messageID, originMsgID, chosenTrack, stMsgId3);
+        return message.reply("⏳ انتهت الجلسة، ابحث مجدداً.");
       }
+      if (idx >= session.results.length) return;
+
+      const chosenTrack = session.results[idx];
+      const originMsgID = session.originMsgID;
+      const listMsgId   = session.listMsgId;
+      delete global.soundcloudSearchSessions[senderID];
+
+      if (originMsgID) react(api, originMsgID, threadID, "🤖");
+      await downloadAndSend(api, threadID, messageID, originMsgID, chosenTrack, listMsgId);
       return;
     }
 
@@ -173,17 +173,45 @@ module.exports = {
         return await downloadAndSend(api, threadID, messageID, messageID, allTracks[0]);
       }
 
+      // قائمة بالإيموجي
       let msg = `🎵 نتائج البحث:\n${"─".repeat(22)}\n`;
       allTracks.forEach((t, i) => {
-        msg += `${i + 1}. 📝 ${t.title}\n${"─".repeat(22)}\n`;
+        msg += `${TRACK_EMOJIS[i]} ${t.title}\n${"─".repeat(22)}\n`;
       });
-      msg += `🔢 أرسل رقم الأغنية (1-${allTracks.length}) للتحميل.\n⏳ تنتهي بعد دقيقتين.`;
+      msg += `تفاعل بالإيموجي لاختيار الأغنية\n⏳ تنتهي بعد دقيقتين.`;
+
+      const sent = await new Promise((res, rej) =>
+        api.sendMessage(msg, threadID, (err, info) => err ? rej(err) : res(info), messageID)
+      );
 
       global.soundcloudSearchSessions[senderID] = {
-        results: allTracks, timestamp: Date.now(), originMsgID: messageID,
+        results: allTracks,
+        timestamp: Date.now(),
+        originMsgID: messageID,
+        listMsgId: sent?.messageID || null,
       };
 
-      api.sendMessage(msg, threadID, null, messageID);
+      // أيضاً يستمع للتفاعل على رسالة القائمة
+      if (sent?.messageID && global.client?.reactionListener) {
+        global.client.reactionListener[sent.messageID] = {
+          author: event.senderID,
+          callback: async ({ api, event: re }) => {
+            const idx = TRACK_EMOJIS.indexOf(re.reaction);
+            if (idx === -1 || idx >= allTracks.length) return;
+
+            delete global.client.reactionListener[sent.messageID];
+            delete global.soundcloudSearchSessions[senderID];
+
+            react(api, messageID, threadID, "🤖");
+            await downloadAndSend(api, threadID, messageID, messageID, allTracks[idx], sent.messageID);
+          },
+        };
+        setTimeout(() => {
+          delete global.client?.reactionListener?.[sent.messageID];
+          delete global.soundcloudSearchSessions[senderID];
+        }, 120000);
+      }
+
       react(api, messageID, threadID, "✅");
 
     } catch (error) {

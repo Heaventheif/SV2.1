@@ -1,3 +1,4 @@
+
 "use strict";
 
 const axios = require("axios");
@@ -11,10 +12,10 @@ const { sendMoodSticker } = require("../utils/danceSticker.js");
 
 const EMOJI_PAIRS = [
   ["👍", "❤️"], ["😆", "😮"], ["😢", "😡"],
-  ["🥰", "👏"], ["🔥", "💯"], ["😍", "😭"], ["🤔", "👀"],
+  ["🥰", "👏"], ["🤩", "😘"], ["😍", "😭"],
+  ["🤔", "😅"], ["😁", "🥹"], ["🥸", "😎"], ["🙂", 😇"],
 ];
 
-// ── جلب معلومات + رابط التحميل ───────────────────────────────
 async function fetchInfo(youtubeUrl, type = "mp3") {
   const res = await axios.get(API_BASE, {
     params: { url: youtubeUrl, type },
@@ -28,8 +29,8 @@ async function fetchInfo(youtubeUrl, type = "mp3") {
   return { title: title || "بدون عنوان", downloadUrl: download };
 }
 
-// ── تحميل وإرسال ─────────────────────────────────────────────
-async function downloadAndSend(api, threadID, messageID, youtubeUrl, wantMp4, statusMsgId = null) {
+// بدون رسالة "جارٍ التحميل" — يحذف القائمة بعد الإرسال
+async function downloadAndSend(api, threadID, messageID, youtubeUrl, wantMp4, listMsgId = null) {
   const type = wantMp4 ? "mp4" : "mp3";
   let title, downloadUrl;
 
@@ -62,8 +63,8 @@ async function downloadAndSend(api, threadID, messageID, youtubeUrl, wantMp4, st
       )
     );
 
-    if (statusMsgId) { try { await api.unsendMessage(statusMsgId); } catch (_) {} }
-    if (!wantMp4) sendMoodSticker(api, threadID); // fire-and-forget
+    if (listMsgId) { try { await api.unsendMessage(listMsgId); } catch (_) {} }
+    if (!wantMp4) sendMoodSticker(api, threadID);
 
   } catch (e) {
     api.sendMessage(`❌ ${e.response?.data?.error || e.message}`, threadID, null, messageID);
@@ -72,7 +73,6 @@ async function downloadAndSend(api, threadID, messageID, youtubeUrl, wantMp4, st
   }
 }
 
-// ── بحث ──────────────────────────────────────────────────────
 async function searchYT(query, limit = 7) {
   const url = `https://yt-dlp-stream.onrender.com/api/v3/q?=${encodeURIComponent(query)}&?=${limit}`;
   const res  = await axios.get(url, { timeout: 25000 });
@@ -83,7 +83,6 @@ async function searchYT(query, limit = 7) {
   return [];
 }
 
-// ── بناء نص القائمة ───────────────────────────────────────────
 function buildListText(results, wantMp4) {
   let text = `${wantMp4 ? "🎬" : "🎵"} نتائج البحث:\n${"─".repeat(22)}\n`;
   results.forEach((v, i) => {
@@ -94,16 +93,15 @@ function buildListText(results, wantMp4) {
       `   ${mp3E} mp3  |  ${mp4E} mp4\n` +
       `${"─".repeat(22)}\n`;
   });
-  text += `🔢 رُد بالرقم (مثال: 1 أو 1 mp4)\nأو تفاعل بالإيموجي\n⏳ تنتهي بعد دقيقتين.`;
+  text += `تفاعل بالإيموجي لاختيار الأغنية\n⏳ تنتهي بعد دقيقتين.`;
   return text;
 }
 
-// ═══════════════════════════════════════════════════════════════
 module.exports = {
   config: {
     name:        "ydl",
     aliases:     ["ytdl2"],
-    version:     "2.0",
+    version:     "2.1",
     role:        0,
     countDown:   15,
     category:    "download",
@@ -130,7 +128,6 @@ module.exports = {
       "🔗 ydl <رابط>        — تحميل مباشر"
     );
 
-    // ── تحليل الوسائط ─────────────────────────────────────────
     let remaining = [...args];
     const showList = remaining[0]?.toLowerCase() === "s";
     if (showList) remaining = remaining.slice(1);
@@ -141,13 +138,9 @@ module.exports = {
     const query = remaining.join(" ").trim();
     if (!query) return message.reply("❌ أرسل اسم الأغنية أو الرابط.");
 
-    // ── رابط مباشر ────────────────────────────────────────────
     const isUrl = /^https?:\/\//i.test(query);
-    if (isUrl) {
-      return await downloadAndSend(api, threadID, messageID, query, wantMp4);
-    }
+    if (isUrl) return await downloadAndSend(api, threadID, messageID, query, wantMp4);
 
-    // ── بحث مباشر بدون قائمة ──────────────────────────────────
     if (!showList) {
       try {
         const results = await searchYT(query, 1);
@@ -159,7 +152,6 @@ module.exports = {
       }
     }
 
-    // ── قائمة ────────────────────────────────────────────────
     try {
       const results = await searchYT(query, 7);
       if (!results.length)
@@ -171,63 +163,26 @@ module.exports = {
           (err, info) => err ? reject(err) : resolve(info), messageID)
       );
 
-      if (sent?.messageID) {
-        if (global.Kagenou?.replies) {
-          global.Kagenou.replies[sent.messageID] = {
-            commandName: "ydl",
-            author:      event.senderID,
-            results:     list,
-            wantMp4,
-            statusMsgId: sent.messageID,
-            timestamp:   Date.now(),
-          };
-        }
+      if (sent?.messageID && global.client?.reactionListener) {
+        global.client.reactionListener[sent.messageID] = {
+          author: event.senderID,
+          callback: async ({ api, event: re }) => {
+            const idx = EMOJI_PAIRS.findIndex(([a, b]) => re.reaction === a || re.reaction === b);
+            if (idx === -1 || idx >= list.length) return;
 
-        if (global.client?.reactionListener) {
-          global.client.reactionListener[sent.messageID] = {
-            author: event.senderID,
-            callback: async ({ api, event: re }) => {
-              const idx = EMOJI_PAIRS.findIndex(([a, b]) => re.reaction === a || re.reaction === b);
-              if (idx === -1 || idx >= list.length) return;
+            const wantMp4R = re.reaction === EMOJI_PAIRS[idx][1];
+            const chosen   = list[idx];
 
-              const wantMp4R = re.reaction === EMOJI_PAIRS[idx][1];
-              const chosen   = list[idx];
+            delete global.client.reactionListener[sent.messageID];
+            if (global.Kagenou?.replies) delete global.Kagenou.replies[sent.messageID];
 
-              delete global.client.reactionListener[sent.messageID];
-              if (global.Kagenou?.replies) delete global.Kagenou.replies[sent.messageID];
-
-              try { await api.editMessage(`⏳ جارٍ تحميل: ${chosen.title || ''}...`, sent.messageID); } catch (_) {}
-              await downloadAndSend(api, threadID, messageID, chosen.url || chosen.short_url, wantMp4R, sent.messageID);
-            },
-          };
-          setTimeout(() => { delete global.client.reactionListener[sent.messageID]; }, 120000);
-        }
+            await downloadAndSend(api, threadID, messageID, chosen.url || chosen.short_url, wantMp4R, sent.messageID);
+          },
+        };
+        setTimeout(() => { delete global.client.reactionListener[sent.messageID]; }, 120000);
       }
     } catch (e) {
       api.sendMessage(`❌ ${e.message}`, threadID, null, messageID);
     }
-  },
-
-  onReply: async ({ api, event, Reply }) => {
-    if (event.senderID !== Reply.author || !Reply.results) return;
-
-    const { threadID, messageID } = event;
-    const parts   = event.body?.trim().split(/\s+/) || [];
-    const idx     = parseInt(parts[0]) - 1;
-    const wantMp4 = parts[1]?.toLowerCase() === "mp4" ? true
-                  : parts[1]?.toLowerCase() === "mp3" ? false
-                  : Reply.wantMp4 ?? false;
-
-    if (isNaN(idx) || idx < 0 || idx >= Reply.results.length)
-      return api.sendMessage(`❌ أرسل رقماً من 1 إلى ${Reply.results.length}`, threadID);
-
-    const chosen = Reply.results[idx];
-
-    delete global.client?.reactionListener?.[Reply.statusMsgId];
-    delete global.Kagenou?.replies?.[Reply.statusMsgId];
-
-    const listMsgId = Reply.statusMsgId;
-    try { await api.editMessage(`⏳ جارٍ تحميل: ${chosen.title || ''}...`, listMsgId); } catch (_) {}
-    await downloadAndSend(api, threadID, messageID, chosen.url || chosen.short_url, wantMp4, listMsgId);
   },
 };

@@ -1,3 +1,4 @@
+
 "use strict";
 
 const axios = require("axios");
@@ -11,10 +12,10 @@ const { sendMoodSticker } = require("../utils/danceSticker.js");
 
 const EMOJI_PAIRS = [
   ["👍", "❤️"], ["😆", "😮"], ["😢", "😡"],
-  ["🥰", "👏"], ["🔥", "💯"], ["😍", "😭"], ["🤔", "👀"],
+  ["🥰", "👏"], ["🤩", "😘"], ["😍", "😭"],
+  ["🤔", "😅"], ["😁", "🥹"], ["🥸", "😎"], ["🙂", 😇"],
 ];
 
-// ── تحميل ملف إلى /tmp ────────────────────────────────────────
 async function getStream(url) {
   const ext      = url.match(/\.(mp4|mp3|webm|m4a)/i)?.[1] || "mp3";
   const filePath = path.join(os.tmpdir(), `yt2_${Date.now()}.${ext}`);
@@ -38,7 +39,6 @@ async function cleanTemp(filePath) {
   try { if (await fs.pathExists(filePath)) await fs.remove(filePath); } catch (_) {}
 }
 
-// ── v2 (جلب روابط التحميل) ───────────────────────────────────
 async function v2(query) {
   const url = `${BASE}/v2/q?=${encodeURIComponent(query)}`;
   const res = await axios.get(url, { timeout: 30000 });
@@ -48,7 +48,6 @@ async function v2(query) {
   return data;
 }
 
-// ── v3 (بحث) ─────────────────────────────────────────────────
 async function v3(query, limit = 7) {
   const url = `${BASE}/v3/q?=${encodeURIComponent(query)}&?=${limit}`;
   const res = await axios.get(url, { timeout: 25000 });
@@ -60,7 +59,6 @@ async function v3(query, limit = 7) {
   return { results: [] };
 }
 
-// ── استخراج روابط من v2 ───────────────────────────────────────
 function parse(d) {
   if (!d || typeof d !== "object") return { title: "بدون عنوان", author: "", mp4Url: null, mp3Url: null };
   const m = (d.media && typeof d.media === "object" && !Array.isArray(d.media)) ? d.media : {};
@@ -78,8 +76,8 @@ function parse(d) {
   };
 }
 
-// ── تحميل + إرسال ────────────────────────────────────────────
-async function downloadAndSend(api, threadID, messageID, query, wantMp4, statusMsgId = null) {
+// بدون رسالة "جارٍ التحميل" — يحذف القائمة بعد الإرسال
+async function downloadAndSend(api, threadID, messageID, query, wantMp4, listMsgId = null) {
   const p   = parse(await v2(query));
   const url = wantMp4 ? p.mp4Url : p.mp3Url;
 
@@ -103,8 +101,8 @@ async function downloadAndSend(api, threadID, messageID, query, wantMp4, statusM
       )
     );
 
-    if (statusMsgId) { try { await api.unsendMessage(statusMsgId); } catch (_) {} }
-    if (!wantMp4) sendMoodSticker(api, threadID); // fire-and-forget
+    if (listMsgId) { try { await api.unsendMessage(listMsgId); } catch (_) {} }
+    if (!wantMp4) sendMoodSticker(api, threadID);
 
   } catch (e) {
     api.sendMessage(`❌ ${e.response?.data?.error || e.message}`, threadID, null, messageID);
@@ -113,7 +111,6 @@ async function downloadAndSend(api, threadID, messageID, query, wantMp4, statusM
   }
 }
 
-// ── بناء نص القائمة ───────────────────────────────────────────
 function buildListText(results, wantMp4) {
   let text = `${wantMp4 ? "🎬" : "🎵"} نتائج البحث:\n${"─".repeat(22)}\n`;
   results.forEach((v, i) => {
@@ -124,16 +121,15 @@ function buildListText(results, wantMp4) {
       `   ${mp3E} mp3  |  ${mp4E} mp4\n` +
       `${"─".repeat(22)}\n`;
   });
-  text += `🔢 رُد بالرقم، أو تفاعل بإيموجي (mp3/mp4)\n⏳ تنتهي بعد دقيقتين.`;
+  text += `تفاعل بالإيموجي لاختيار الأغنية\n⏳ تنتهي بعد دقيقتين.`;
   return text;
 }
 
-// ═══════════════════════════════════════════════════════════════
 module.exports = {
   config: {
     name:        "yt2",
     aliases:     ["يوتيوب2"],
-    version:     "5.0",
+    version:     "5.1",
     role:        0,
     countDown:   15,
     category:    "download",
@@ -160,7 +156,6 @@ module.exports = {
       "🔗 yt2 <رابط>        — تحميل مباشر"
     );
 
-    // ── تحليل الوسائط ─────────────────────────────────────────
     let remaining = [...args];
     const showList = remaining[0]?.toLowerCase() === "s";
     if (showList) remaining = remaining.slice(1);
@@ -171,13 +166,9 @@ module.exports = {
     const query = remaining.join(" ").trim();
     if (!query) return message.reply("❌ أرسل اسم الأغنية أو الرابط.");
 
-    // ── رابط مباشر ────────────────────────────────────────────
     const isUrl = /^https?:\/\//i.test(query);
-    if (isUrl) {
-      return await downloadAndSend(api, threadID, messageID, query, wantMp4);
-    }
+    if (isUrl) return await downloadAndSend(api, threadID, messageID, query, wantMp4);
 
-    // ── بحث مباشر بدون قائمة ──────────────────────────────────
     if (!showList) {
       try {
         const res = await v3(query, 1);
@@ -190,7 +181,6 @@ module.exports = {
       }
     }
 
-    // ── قائمة ────────────────────────────────────────────────
     try {
       const res = await v3(query, 7);
       if (!res.results?.length)
@@ -202,68 +192,29 @@ module.exports = {
           (err, info) => err ? reject(err) : resolve(info), messageID)
       );
 
-      if (sent?.messageID) {
-        if (global.Kagenou?.replies) {
-          global.Kagenou.replies[sent.messageID] = {
-            commandName: "yt2",
-            author:      event.senderID,
-            results:     list,
-            wantMp4,
-            statusMsgId: sent.messageID,
-            timestamp:   Date.now(),
-          };
-        }
+      if (sent?.messageID && global.client?.reactionListener) {
+        global.client.reactionListener[sent.messageID] = {
+          author: event.senderID,
+          callback: async ({ api, event: re }) => {
+            const reaction = re.reaction;
+            const idx = EMOJI_PAIRS.findIndex(([mp3, mp4]) => reaction === mp3 || reaction === mp4);
+            if (idx === -1 || idx >= list.length) return;
 
-        if (global.client?.reactionListener) {
-          global.client.reactionListener[sent.messageID] = {
-            author: event.senderID,
-            callback: async ({ api, event: re }) => {
-              const reaction = re.reaction;
-              const idx = EMOJI_PAIRS.findIndex(([mp3, mp4]) => reaction === mp3 || reaction === mp4);
-              if (idx === -1 || idx >= list.length) return;
+            const wantMp4R = reaction === EMOJI_PAIRS[idx][1];
+            const chosen   = list[idx];
 
-              const wantMp4R = reaction === EMOJI_PAIRS[idx][1];
-              const chosen   = list[idx];
+            delete global.client.reactionListener[sent.messageID];
+            if (global.Kagenou?.replies) delete global.Kagenou.replies[sent.messageID];
 
-              delete global.client.reactionListener[sent.messageID];
-              if (global.Kagenou?.replies) delete global.Kagenou.replies[sent.messageID];
-
-              try { await api.editMessage(`⏳ جارٍ تحميل: ${chosen.title || ''}...`, sent.messageID); } catch (_) {}
-              await downloadAndSend(api, threadID, messageID, chosen.url || chosen.short_url, wantMp4R, sent.messageID);
-            },
-          };
-          setTimeout(() => {
-            delete global.client?.reactionListener?.[sent.messageID];
-          }, 120000);
-        }
+            await downloadAndSend(api, threadID, messageID, chosen.url || chosen.short_url, wantMp4R, sent.messageID);
+          },
+        };
+        setTimeout(() => {
+          delete global.client?.reactionListener?.[sent.messageID];
+        }, 120000);
       }
     } catch (e) {
       api.sendMessage(`❌ ${e.response?.data?.error || e.message}`, threadID, null, messageID);
     }
-  },
-
-  onReply: async ({ api, event, Reply, message }) => {
-    if (event.senderID !== Reply.author || !Reply.results) return;
-
-    const { threadID, messageID } = event;
-    const parts   = event.body?.trim().split(/\s+/) || [];
-    const idx     = parseInt(parts[0]) - 1;
-    const wantMp4 = parts[1]?.toLowerCase() === "mp4"
-      ? true
-      : parts[1]?.toLowerCase() === "mp3"
-        ? false
-        : Reply.wantMp4 ?? false;
-
-    if (isNaN(idx) || idx < 0 || idx >= Reply.results.length)
-      return message.reply(`❌ أرسل رقماً من 1 إلى ${Reply.results.length}`);
-
-    const chosen = Reply.results[idx];
-
-    delete global.client?.reactionListener?.[Reply.statusMsgId];
-    delete global.Kagenou?.replies?.[Reply.statusMsgId];
-
-    const listMsgId = Reply.statusMsgId;
-    try { await api.editMessage(`⏳ جارٍ تحميل: ${chosen.title || ''}...`, listMsgId); } catch (_) {}
-    await downloadAndSend(api, threadID, messageID, chosen.url || chosen.short_url, wantMp4, listMsgId);
   },
 };

@@ -1,3 +1,4 @@
+
 "use strict";
 
 const axios = require("axios");
@@ -11,11 +12,10 @@ const HF = `http://localhost:${process.env.PORT || 10000}`;
 
 const EMOJI_PAIRS = [
   ["👍", "❤️"], ["😆", "😮"], ["😢", "😡"],
-  ["🥰", "👏"], ["🔥", "💯"], ["😍", "😭"],
-  ["🤔", "👀"], ["🎉", "🎊"], ["💙", "💜"], ["🌟", "⭐"],
+  ["🥰", "👏"], ["🤩", "😘"], ["😍", "😭"],
+  ["🤔", "😅"], ["😁", "🥹"], ["🥸", "😎"], ["🙂", 😇"],
 ];
 
-// ── بحث ──────────────────────────────────────────────────────
 async function ytSearch(query, limit = 10) {
   const { data } = await axios.post(
     `${HF}/yt/search`,
@@ -26,7 +26,6 @@ async function ytSearch(query, limit = 10) {
   return data.results;
 }
 
-// ── تحميل ─────────────────────────────────────────────────────
 async function downloadFromHF(ytUrl, wantMp4) {
   const endpoint = wantMp4 ? "/yt/video" : "/yt/audio";
   const ext      = wantMp4 ? "mp4" : "mp3";
@@ -75,8 +74,8 @@ async function cleanTemp(p) {
   try { if (p && await fs.pathExists(p)) await fs.remove(p); } catch (_) {}
 }
 
-// ── تحميل + إرسال ────────────────────────────────────────────
-async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4, statusMsgId = null) {
+// بدون رسالة "جارٍ التحميل" — يحذف القائمة بعد الإرسال مباشرة
+async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4, listMsgId = null) {
   let filePath = null;
   try {
     const dl  = await downloadFromHF(ytUrl, wantMp4);
@@ -104,8 +103,9 @@ async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4, statusM
       )
     );
 
-    if (statusMsgId) { try { await api.unsendMessage(statusMsgId); } catch (_) {} }
-    if (!wantMp4) sendMoodSticker(api, threadID); // fire-and-forget
+    // حذف رسالة القائمة بعد نجاح الإرسال
+    if (listMsgId) { try { await api.unsendMessage(listMsgId); } catch (_) {} }
+    if (!wantMp4) sendMoodSticker(api, threadID);
 
   } catch (err) {
     let msg = err.message || "خطأ غير معروف";
@@ -123,7 +123,6 @@ async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4, statusM
   }
 }
 
-// ── بناء نص القائمة ───────────────────────────────────────────
 function buildListText(results, wantMp4) {
   let text = `${wantMp4 ? "🎬" : "🎵"} نتائج البحث:\n${"─".repeat(22)}\n`;
   results.forEach((v, i) => {
@@ -134,16 +133,15 @@ function buildListText(results, wantMp4) {
       `   ${mp3E} mp3  |  ${mp4E} mp4\n` +
       `${"─".repeat(22)}\n`;
   });
-  text += `🔢 رُد بالرقم (مثال: 3 mp4)\nأو تفاعل بالإيموجي\n⏳ تنتهي بعد دقيقتين`;
+  text += `تفاعل بالإيموجي لاختيار الأغنية\n⏳ تنتهي بعد دقيقتين`;
   return text;
 }
 
-// ═══════════════════════════════════════════════════════════════
 module.exports = {
   config: {
     name:        "yt",
     aliases:     ["يوتيوب"],
-    version:     "6.0",
+    version:     "6.1",
     role:        0,
     countDown:   15,
     category:    "download",
@@ -171,7 +169,6 @@ module.exports = {
       "🎚 الجودة: صوت 128kbps | فيديو 360p"
     );
 
-    // ── تحليل الوسائط ─────────────────────────────────────────
     let remaining = [...args];
     const showList = remaining[0]?.toLowerCase() === "s";
     if (showList) remaining = remaining.slice(1);
@@ -182,13 +179,9 @@ module.exports = {
     const query = remaining.join(" ").trim();
     if (!query) return message.reply("❌ أرسل اسم الأغنية أو الرابط.");
 
-    // ── رابط مباشر ────────────────────────────────────────────
     const isUrl = /^https?:\/\//i.test(query);
-    if (isUrl) {
-      return await downloadAndSend(api, threadID, messageID, query, wantMp4);
-    }
+    if (isUrl) return await downloadAndSend(api, threadID, messageID, query, wantMp4);
 
-    // ── بحث مباشر بدون قائمة ──────────────────────────────────
     if (!showList) {
       try {
         const results = await ytSearch(query, 1);
@@ -198,7 +191,6 @@ module.exports = {
       }
     }
 
-    // ── قائمة ────────────────────────────────────────────────
     try {
       const results = await ytSearch(query, 10);
       const list    = results.slice(0, 10);
@@ -209,17 +201,6 @@ module.exports = {
       );
 
       if (sent?.messageID) {
-        if (global.Kagenou?.replies) {
-          global.Kagenou.replies[sent.messageID] = {
-            commandName: "yt",
-            author:      event.senderID,
-            results:     list,
-            wantMp4,
-            statusMsgId: sent.messageID,
-            timestamp:   Date.now(),
-          };
-        }
-
         if (global.client?.reactionListener) {
           global.client.reactionListener[sent.messageID] = {
             author: event.senderID,
@@ -234,42 +215,17 @@ module.exports = {
               delete global.client.reactionListener[sent.messageID];
               if (global.Kagenou?.replies) delete global.Kagenou.replies[sent.messageID];
 
-              try { await api.editMessage(`⏳ جارٍ تحميل: ${chosen.title || ''}...`, sent.messageID); } catch (_) {}
               await downloadAndSend(api, threadID, messageID, chosen.url, wantMp4R, sent.messageID);
             },
           };
           setTimeout(() => {
             delete global.client?.reactionListener?.[sent.messageID];
+            if (global.Kagenou?.replies) delete global.Kagenou.replies[sent.messageID];
           }, 120000);
         }
       }
     } catch (e) {
       api.sendMessage(`❌ ${e.message?.substring(0, 150) || "خطأ في البحث"}`, threadID, null, messageID);
     }
-  },
-
-  onReply: async ({ api, event, Reply, message }) => {
-    if (!Reply?.results || event.senderID !== Reply.author) return;
-
-    const { threadID, messageID } = event;
-    const parts   = event.body?.trim().split(/\s+/) || [];
-    const idx     = parseInt(parts[0]) - 1;
-    const wantMp4 = parts[1]?.toLowerCase() === "mp4"
-      ? true
-      : parts[1]?.toLowerCase() === "mp3"
-        ? false
-        : Reply.wantMp4 ?? false;
-
-    if (isNaN(idx) || idx < 0 || idx >= Reply.results.length)
-      return message.reply(`❌ أرسل رقماً من 1 إلى ${Reply.results.length}\nمثال: 3 mp4`);
-
-    const chosen = Reply.results[idx];
-
-    delete global.client?.reactionListener?.[Reply.statusMsgId];
-    delete global.Kagenou?.replies?.[Reply.statusMsgId];
-
-    const listMsgId = Reply.statusMsgId;
-    try { await api.editMessage(`⏳ جارٍ تحميل: ${chosen.title || ''}...`, listMsgId); } catch (_) {}
-    await downloadAndSend(api, threadID, messageID, chosen.url, wantMp4, listMsgId);
   },
 };
