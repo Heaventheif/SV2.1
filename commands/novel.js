@@ -175,7 +175,7 @@ function cleanText(t) {
 // ─── تحويل دوال الـ callback لـ Promise (لتقليل التكرار) ─────
 const sendMessageAsync = (api, body, threadID, messageID) =>
   new Promise((resolve, reject) =>
-    api.sendMessage(body, threadID, (err, info) => (err ? reject(err) : resolve(info)), messageID)
+    global.safeSend(api, body, threadID, (err, info) => (err ? reject(err) : resolve(info)), messageID)
   );
 
 // ─── سباق سريع: أول نتيجة ناجحة تكسب (بدل التسلسل) ────────────
@@ -439,7 +439,7 @@ async function fetchFromFallback(site, novelName, chapterNum) {
 // لحد أكثر أمانًا (مع هامش لإضافة لاحقة رقم الجزء)، ومع ضمان أن
 // أي جزء لن يتجاوز الحد أبدًا حتى لو كانت فقرة واحدة بعد الترجمة
 // أطول من الحد بمفردها — تُقسَّم عند حدود الجمل بدل تركها كما هي.
-const SAFE_MESSAGE_LEN = 1900;
+const SAFE_MESSAGE_LEN = 9000;
 
 function splitMessage(text, maxLen = SAFE_MESSAGE_LEN) {
   const chunks = [];
@@ -534,7 +534,7 @@ module.exports = {
     const { threadID, messageID } = event;
 
     if (args.length < 2) {
-      return api.sendMessage(
+      return global.safeSend(api, 
         "📚 قارئ الروايات\n\n" +
         "📝 الاستخدام:\n  .novel [اسم الرواية] [رقم الفصل]\n\n" +
         "💡 أمثلة:\n" +
@@ -554,7 +554,7 @@ module.exports = {
 
     const lastArg = args[args.length - 1];
     if (isNaN(lastArg) || Number(lastArg) < 1) {
-      return api.sendMessage(
+      return global.safeSend(api, 
         "❌ يجب أن يكون آخر شيء في الأمر رقم الفصل\n💡 مثال: .novel martial peak 1",
         threadID, null, messageID
       );
@@ -563,7 +563,7 @@ module.exports = {
     const novelName  = args.slice(0, -1).join(" ").trim();
 
     if (!novelName) {
-      return api.sendMessage(
+      return global.safeSend(api, 
         "❌ يجب كتابة اسم الرواية قبل رقم الفصل\n💡 مثال: .novel martial peak 1",
         threadID, null, messageID
       );
@@ -637,8 +637,8 @@ module.exports = {
         `💡 تأكد من:\n• الاسم الإنجليزي الصحيح\n• رقم الفصل صحيح`;
       try {
         if (statusMsgId) await api.editMessage(errMsg, statusMsgId);
-        else api.sendMessage(errMsg, threadID, null, messageID);
-      } catch (_) { api.sendMessage(errMsg, threadID, null, messageID); }
+        else global.safeSend(api, errMsg, threadID, null, messageID);
+      } catch (_) { global.safeSend(api, errMsg, threadID, null, messageID); }
       return;
     }
 
@@ -652,7 +652,7 @@ module.exports = {
     // حذف رسالة الحالة
     try { if (statusMsgId) await api.unsendMessage(statusMsgId, threadID); } catch (_) {}
 
-    // ① إرسال كأجزاء مقطعة دائمًا (1900 حرف/جزء)
+    // ① إرسال كأجزاء مقطعة دائمًا (9000 حرف/جزء)
     // fca لا يرفع خطأ عند رفض فيسبوك للرسالة الطويلة بصمت،
     // فكنّا نظن trySendAsSingle نجحت ونتجاوز sendAsChunks بالكامل.
     // الحل: دائمًا sendAsChunks مباشرة.
@@ -667,7 +667,7 @@ module.exports = {
       await sendAsFile(api, threadID, messageID, novelName, chapterNum, header, translated);
     } catch (err) {
       console.error("[NOVEL] فشل إرسال الملف:", err.message);
-      api.sendMessage(`❌ فشل إرسال الملف: ${err.message}`, threadID, null, messageID);
+      global.safeSend(api, `❌ فشل إرسال الملف: ${err.message}`, threadID, null, messageID);
     }
   }
 };
