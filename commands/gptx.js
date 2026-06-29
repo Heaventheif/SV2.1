@@ -6,21 +6,21 @@ const axios = require('axios');
 const token = process.env.GITHUB_MODELS_TOKEN;
 const openai = new OpenAI({ baseURL: "https://models.inference.ai.azure.com", apiKey: token });
 
-// ✅ الجلسات الجماعية تُخزَّن بـ threadID
 const sessionsDir = path.join(__dirname, '..', 'cache', 'ai_sessions_gptx');
 fs.ensureDirSync(sessionsDir);
 
 const SYSTEM_PROMPT = `أنت مساعد ذكي اسمك "Sunken". أجب بإيجاز باللغة العربية (أقل من 150 كلمة). كن ودوداً ومهذباً.`;
 
-const setReaction = (api, reaction, messageID, threadID) => {
-  try {
-    if (!reaction || !messageID || !threadID) return;
-    if (String(messageID) === "undefined" || String(threadID) === "undefined") return;
-    api.setMessageReaction({ reaction: String(reaction), messageID: String(messageID), threadID: String(threadID) }, () => {});
-  } catch (e) {}
-};
+// كلمات التشغيل — الرسائل التي تبدأ بها تُحوَّل لـ gptx
+const TRIGGERS = ["gptx ", "gptx", "ai ", "ذكاء "];
 
-// ✅ مفتاح الجلسة = threadID (مشترك للكل في المجموعة)
+function setReaction(api, emoji, messageID, threadID) {
+  try {
+    if (!emoji || !messageID || !threadID) return;
+    api.setMessageReaction(emoji, messageID, threadID, () => {}, true);
+  } catch (_) {}
+}
+
 async function loadSession(threadID) {
   const sessionFile = path.join(sessionsDir, `thread_${threadID}.json`);
   try {
@@ -69,7 +69,6 @@ async function callGPT(context, prompt, imageData = null) {
 }
 
 async function handleMessage(api, event, message, prompt) {
-  // ✅ الجلسة الجماعية: نستخدم threadID
   const { threadID, messageID, senderID } = event;
 
   if (prompt.trim().toLowerCase() === "clear" || prompt.trim() === "مسح") {
@@ -77,7 +76,6 @@ async function handleMessage(api, event, message, prompt) {
     return message.reply("🧹 تم مسح ذاكرة المجموعة.");
   }
 
-  // ✅ جلب اسم المرسل لإضافته للسياق
   let senderName = senderID;
   try {
     const userInfo = await new Promise((res, rej) =>
@@ -104,7 +102,6 @@ async function handleMessage(api, event, message, prompt) {
   setReaction(api, "⏳", messageID, threadID);
   const context = await loadSession(threadID);
 
-  // ✅ نضيف اسم المرسل للرسالة
   const userText = imageData
     ? `[${senderName}]: [صورة] ${prompt || ""}`.trim()
     : `[${senderName}]: ${prompt}`;
@@ -137,7 +134,7 @@ async function handleMessage(api, event, message, prompt) {
 module.exports = {
   config: {
     name: "gptx",
-    version: "2.0.0",
+    version: "2.1.0",
     author: "Sunken",
     countDown: 3,
     role: 0,
@@ -146,11 +143,26 @@ module.exports = {
     category: "ذكاء اصطناعي",
     guide: { ar: "gptx [سؤالك] ← بدء محادثة\nردّ على رسالة البوت ← يكمل تلقائياً\nردّ على صورة ← يحللها\ngptx مسح ← مسح ذاكرة المجموعة" }
   },
+
+  // onStart: يُشغَّل عندما يكتب المستخدم "gptx ..." كأمر عادي
   onStart: async ({ api, event, args, message }) => {
     let prompt = args.join(" ").trim();
     if (!prompt && event.messageReply) prompt = event.messageReply.body || "";
     await handleMessage(api, event, message, prompt);
   },
+
+  // onChat: يستمع لكل رسالة — يفعّل gptx إذا بدأت بكلمة تشغيل
+  onChat: async ({ api, event, message }) => {
+    const { body } = event;
+    if (!body) return;
+    const lower = body.trim().toLowerCase();
+    const trigger = TRIGGERS.find(t => lower.startsWith(t));
+    if (!trigger) return;
+    const prompt = body.trim().slice(trigger.trim().length).trim();
+    await handleMessage(api, event, message, prompt);
+  },
+
+  // onReply: يكمل المحادثة عند الرد على رسالة البوت
   onReply: async ({ api, event, message, Reply }) => {
     const prompt = event.body?.trim() || "";
     if (!prompt && !(event.attachments?.length)) return;

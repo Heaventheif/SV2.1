@@ -14,7 +14,10 @@ const VIDEO_BLOGS = [
 ];
 
 function react(api, msgID, threadID, emoji) {
-  try { if (msgID && threadID) api.setMessageReaction({ reaction: String(emoji), messageID: String(msgID), threadID: String(threadID) }, () => {}); } catch (_) {}
+  try {
+    if (!msgID || !threadID) return;
+    api.setMessageReaction(emoji, msgID, threadID, () => {}, true);
+  } catch (_) {}
 }
 
 module.exports = {
