@@ -3,6 +3,7 @@ const cheerio = require("cheerio");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { translateToArabic } = require("../utils/translator.js");
 
 const cache = new Map();
 const CACHE_TTL = 3600 * 1000;
@@ -90,15 +91,6 @@ const FALLBACK_SITES = [
   },
   // ─── المواقع الجديدة ───────────────────────────────────────────
   {
-    // WuxiaBox: يستخدم رقم ID داخلي للرواية (مثل 6926877) وليس slug نصي
-    name: "WuxiaBox",
-    buildUrl: (novelID, ch) => `https://www.wuxiabox.com/novel/${novelID}_${ch}.html`,
-    selectors: ["article#chapter-article", "div.chapter-content", ".page-in"],
-    titleSel: [".truyen-title", "h1", "title"],
-    slugify: (n) => n,
-    buildChapter: (ch) => String(ch),
-  },
-  {
     // INovelHub: https://inovelhub.com/novel/{slug}/chapter-{ch}
     name: "INovelHub",
     buildUrl: (slug, ch) => `https://inovelhub.com/novel/${slug}/chapter-${ch}`,
@@ -123,6 +115,19 @@ const FALLBACK_SITES = [
     buildChapter: (ch) => String(ch),
   },
 ];
+
+// ─── موقع احتياطي (Fallback) فقط ─────────────────────────────
+// WuxiaBox سريع جدًا لكن جودة ترجمته/نصه الأصلي ضعيفة، لذا لا يُستخدم
+// إلا إذا فشلت جميع المواقع الأساسية أعلاه
+const WUXIABOX_SITE = {
+  // WuxiaBox: يستخدم رقم ID داخلي للرواية (مثل 6926877) وليس slug نصي
+  name: "WuxiaBox",
+  buildUrl: (novelID, ch) => `https://www.wuxiabox.com/novel/${novelID}_${ch}.html`,
+  selectors: ["article#chapter-article", "div.chapter-content", ".page-in"],
+  titleSel: [".truyen-title", "h1", "title"],
+  slugify: (n) => n,
+  buildChapter: (ch) => String(ch),
+};
 
 const PROXIES = [
   { build: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`, successCount: 0 },
@@ -229,10 +234,8 @@ async function translateBatch(paragraphs) {
   const out = [];
   for (let i = 0; i < chunks.length; i++) {
     try {
-      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ar&dt=t&q=${encodeURIComponent(chunks[i])}`;
-      const res = await axios.get(url, { timeout: 15000, headers: { "User-Agent": randomUA() } });
-      if (res.data?.[0]) out.push(res.data[0].map(x => x[0]).filter(Boolean).join(""));
-      else out.push(chunks[i]);
+      const translated = await translateToArabic(chunks[i]);
+      out.push(translated || chunks[i]);
     } catch { out.push(chunks[i]); }
     // تأخير عشوائي بين 300-700ms بين الطلبات لتقليل احتمال تقييد المعدل (rate limiting)
     if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 300 + Math.random() * 400));
@@ -445,6 +448,21 @@ function splitMessage(text, maxLen = 8000) {
   return chunks.length > 0 ? chunks : [text];
 }
 
+// ─── محاولة الإرسال كرسالة واحدة فقط ──────────────────────────
+// مسنجر قد يرفض الرسائل الطويلة جدًا (لا يوجد حد ثابت موثّق رسميًا
+// لكنه عمليًا يرفض النصوص الكبيرة جدًا)، لذا نحاول أولًا، وإن فشلت
+// المحاولة نرجع للتقسيم التقليدي بدل خسارة المحتوى بالكامل.
+async function trySendAsSingleMessage(api, threadID, messageID, header, translated) {
+  const fullText = header + translated.join("\n\n");
+  try {
+    await sendMessageAsync(api, fullText, threadID, messageID);
+    return true;
+  } catch (err) {
+    console.warn(`[NOVEL] فشل إرسال الفصل كرسالة واحدة (${fullText.length} حرف): ${err.message?.substring(0, 150)}`);
+    return false;
+  }
+}
+
 // ─── إرسال كرسائل مقطعة ──────────────────────────────────────
 async function sendAsChunks(api, threadID, messageID, header, translated, divider) {
   const fullText = header + translated.join("\n\n");
@@ -503,10 +521,11 @@ module.exports = {
         "  .novel martial peak 1\n" +
         "  .novel solo leveling 100\n" +
         "  .novel kingdom's bloodline 627\n\n" +
-        "🌐 المصادر (6 مواقع بالتوازي):\n" +
+        "🌐 المصادر (5 مواقع بالتوازي):\n" +
         "  ① AllNovelFull ② NovelFull\n" +
-        "  ③ NovelFire ④ WuxiaBox\n" +
-        "  ⑤ INovelHub ⑥ NovelCrest\n\n" +
+        "  ③ NovelFire ④ INovelHub\n" +
+        "  ⑤ NovelCrest\n" +
+        "  🔁 WuxiaBox (احتياطي فقط)\n\n" +
         "🔄 الترجمة تلقائية للعربية\n" +
         "📨 يُرسل كرسائل مقطعة + ملف .txt",
         threadID, null, messageID
@@ -569,7 +588,22 @@ module.exports = {
       cacheKeyUsed = `${winner.siteName}:${novelName}:${chapterNum}`;
       console.log(`[NOVEL] ✅ ${winner.siteName} نجح أولاً`);
     } catch (err) {
-      console.warn(`[NOVEL] فشل كل المصادر أو انتهى الوقت: ${err.message?.substring(0, 200)}`);
+      console.warn(`[NOVEL] فشلت كل المصادر الأساسية أو انتهى الوقت: ${err.message?.substring(0, 200)}`);
+    }
+
+    // ─── WuxiaBox: يُجرَّب فقط إذا فشلت جميع المواقع الأساسية ───────
+    // (جودة نصه/ترجمته أضعف من باقي المواقع، فهو خيار أخير لا أول خيار)
+    if (!result) {
+      await updateStatus(`🔁 المصادر الأساسية فشلت، تجربة مصدر احتياطي...\n📖 ${novelName}\n📄 الفصل ${chapterNum}`);
+      try {
+        const winner = await fetchFromFallback(WUXIABOX_SITE, novelName, chapterNum);
+        result = winner;
+        cacheKeyUsed = `${WUXIABOX_SITE.name}:${novelName}:${chapterNum}`;
+        console.log(`[NOVEL] ✅ ${WUXIABOX_SITE.name} نجح كاحتياطي أخير`);
+      } catch (err) {
+        siteErrors[WUXIABOX_SITE.name] = err.message?.substring(0, 80);
+        console.warn(`[NOVEL] فشل الاحتياطي WuxiaBox أيضًا: ${err.message?.substring(0, 200)}`);
+      }
     }
 
     if (!result) {
@@ -598,11 +632,16 @@ module.exports = {
     // حذف رسالة الحالة
     try { if (statusMsgId) await api.unsendMessage(statusMsgId); } catch (_) {}
 
-    // ① إرسال كرسائل مقطعة أولاً
-    try {
-      await sendAsChunks(api, threadID, messageID, header, translated, divider);
-    } catch (err) {
-      console.error("[NOVEL] فشل إرسال الرسائل:", err.message);
+    // ① تجربة الإرسال كرسالة واحدة أولاً (قد يرفضها مسنجر لطولها)
+    const sentAsSingle = await trySendAsSingleMessage(api, threadID, messageID, header, translated);
+
+    // إذا فشلت الرسالة الواحدة، نرجع للتقسيم التقليدي كحل احتياطي
+    if (!sentAsSingle) {
+      try {
+        await sendAsChunks(api, threadID, messageID, header, translated, divider);
+      } catch (err) {
+        console.error("[NOVEL] فشل إرسال الرسائل المقطعة:", err.message);
+      }
     }
 
     // ② ثم إرسال كملف .txt
