@@ -13,8 +13,8 @@ const VIDEO_BLOGS = [
   "awesome-picz", "thefrogman",
 ];
 
-function react(api, msgID, emoji) {
-  try { api.setMessageReaction(emoji, msgID, () => {}, true); } catch (_) {}
+function react(api, msgID, threadID, emoji) {
+  try { if (msgID && threadID) api.setMessageReaction({ reaction: String(emoji), messageID: String(msgID), threadID: String(threadID) }, () => {}); } catch (_) {}
 }
 
 module.exports = {
@@ -35,7 +35,7 @@ module.exports = {
     if (!TUMBLR_API_KEY)
       return api.sendMessage("⚠️ TUMBLR_API_KEY غير مضبوط", threadID, null, messageID);
 
-    react(api, messageID, "🤖");
+    react(api, messageID, threadID, "🤖");
     const tmpFile = path.join(os.tmpdir(), `tumblr_${Date.now()}.mp4`);
 
     try {
@@ -65,7 +65,7 @@ module.exports = {
       }
 
       if (!videoUrl) {
-        react(api, messageID, "❌");
+        react(api, messageID, threadID, "❌");
         return api.sendMessage("❌ لم أجد فيديو الآن — حاول مرة أخرى", threadID, null, messageID);
       }
 
@@ -76,7 +76,7 @@ module.exports = {
       });
 
       if (dlResponse.status !== 200) {
-        react(api, messageID, "✅");
+        react(api, messageID, threadID, "✅");
         return api.sendMessage(
           `🎬 ${caption || "فيديو عشوائي"}\n📺 @${blogName}\n\n🔗 ${postUrl}`,
           threadID, null, messageID
@@ -93,12 +93,12 @@ module.exports = {
       const sizeMB = fs.statSync(tmpFile).size / (1024 * 1024);
 
       if (sizeMB < 0.01) {
-        react(api, messageID, "❌");
+        react(api, messageID, threadID, "❌");
         return api.sendMessage("❌ الفيديو فارغ — حاول مرة أخرى", threadID, null, messageID);
       }
 
       if (sizeMB > 25) {
-        react(api, messageID, "✅");
+        react(api, messageID, threadID, "✅");
         return api.sendMessage(
           `🎬 ${caption || "فيديو عشوائي"}\n📺 @${blogName}\n💾 ${sizeMB.toFixed(1)}MB\n\n🔗 ${postUrl}`,
           threadID, null, messageID
@@ -112,10 +112,10 @@ module.exports = {
         )
       );
 
-      react(api, messageID, "✅");
+      react(api, messageID, threadID, "✅");
 
     } catch (error) {
-      react(api, messageID, "❌");
+      react(api, messageID, threadID, "❌");
       let errMsg = "❌ فشل جلب الفيديو\n";
       if (error.response?.status === 401)     errMsg += "🔑 API Key غير صالح";
       else if (error.response?.status === 429) errMsg += "⚠️ تجاوزت حد الطلبات";

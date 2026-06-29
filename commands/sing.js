@@ -25,8 +25,8 @@ function getTempPath() {
   return path.join(os.tmpdir(), `sing_${Date.now()}.mp3`);
 }
 
-function react(api, msgID, emoji) {
-  try { api.setMessageReaction(emoji, msgID, () => {}, true); } catch (_) {}
+function react(api, msgID, threadID, emoji) {
+  try { if (msgID && threadID) api.setMessageReaction({ reaction: String(emoji), messageID: String(msgID), threadID: String(threadID) }, () => {}); } catch (_) {}
 }
 
 // ── تحميل وإرسال أغنية ────────────────────────────────────────
@@ -72,11 +72,11 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track, sta
     );
 
     if (statusMsgId) api.unsendMessage(statusMsgId).catch(() => {});
-    if (originMsgID) react(api, originMsgID, "✅");
+    if (originMsgID) react(api, originMsgID, threadID, "✅");
     sendMoodSticker(api, threadID); // fire-and-forget
 
   } catch (error) {
-    if (originMsgID) react(api, originMsgID, "❌");
+    if (originMsgID) react(api, originMsgID, threadID, "❌");
     let msg;
     if (error.message.includes("25MB"))       msg = "⚠️ الملف أكبر من 25MB.";
     else if (error.code === 'ECONNABORTED')   msg = "❌ انتهت مهلة التحميل.";
@@ -123,7 +123,7 @@ module.exports = {
         const originMsgID = session.originMsgID;
         delete global.soundcloudSearchSessions[senderID];
 
-        if (originMsgID) react(api, originMsgID, "🤖");
+        if (originMsgID) react(api, originMsgID, threadID, "🤖");
         let stMsgId3 = null;
         try {
           const st3 = await new Promise((res, rej) =>
@@ -142,7 +142,7 @@ module.exports = {
     const songName  = showList ? rest.slice(2).trim() : rest;
     if (!songName) return message.reply("❌ مثال: sing shape of you");
 
-    react(api, messageID, "🤖");
+    react(api, messageID, threadID, "🤖");
 
     try {
       const res = await axios.get('https://api.ferdev.my.id/search/soundcloud', {
@@ -152,7 +152,7 @@ module.exports = {
 
       const items = res.data?.result || [];
       if (items.length === 0) {
-        react(api, messageID, "❌");
+        react(api, messageID, threadID, "❌");
         return api.sendMessage("❌ لم يتم العثور على نتائج.", threadID, null, messageID);
       }
 
@@ -164,12 +164,12 @@ module.exports = {
       });
 
       if (allTracks.length === 0) {
-        react(api, messageID, "❌");
+        react(api, messageID, threadID, "❌");
         return api.sendMessage("❌ فشل استخراج الروابط.", threadID, null, messageID);
       }
 
       if (!showList) {
-        react(api, messageID, "✅");
+        react(api, messageID, threadID, "✅");
         return await downloadAndSend(api, threadID, messageID, messageID, allTracks[0]);
       }
 
@@ -184,10 +184,10 @@ module.exports = {
       };
 
       api.sendMessage(msg, threadID, null, messageID);
-      react(api, messageID, "✅");
+      react(api, messageID, threadID, "✅");
 
     } catch (error) {
-      react(api, messageID, "❌");
+      react(api, messageID, threadID, "❌");
       if (error.code === 'ECONNABORTED' || error.message.includes('timeout'))
         return api.sendMessage("❌ انتهت مهلة البحث، حاول مرة أخرى.", threadID, null, messageID);
       api.sendMessage("❌ خطأ أثناء البحث.", threadID, null, messageID);
