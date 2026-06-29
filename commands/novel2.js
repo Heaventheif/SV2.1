@@ -6,7 +6,7 @@ const { translateToArabic } = require("../utils/translator.js");
 
 // ─── رابط HF Space ────────────────────────────────────────────
 // غيّر هذا لرابط الـ Space الخاص بك
-const HF_API = process.env.HF_NOVEL_API || "https://YOUR-SPACE.hf.space";
+const HF_API = process.env.HF_SPACE_URL || "https://YOUR-SPACE.hf.space";
 const HF_TIMEOUT = 60000; // دقيقة كاملة (Playwright يحتاج وقت)
 
 // ─── Cache ────────────────────────────────────────────────────
