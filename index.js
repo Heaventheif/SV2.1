@@ -26,10 +26,9 @@ process.on("unhandledRejection", (reason) => {
   console.error("[unhandledRejection]", msg);
 });
 
-// ─── Globals الضرورية فقط ────────────────────────────────────
-global.threadState      = { active: new Map(), approved: new Map(), pending: new Map() };
-global.client           = { reactionListener: {}, globalData: new Map() };
-global.Kagenou          = { autodlEnabled: false, replies: {}, replyListeners: new Map() };
+// ─── Globals ─────────────────────────────────────────────────
+global.client           = { reactionListener: {} };
+global.Kagenou          = { replies: {} };
 global.config           = { admins: [], moderators: [], developers: [], vips: [], Prefix: ["."], botName: "Sunken Bot" };
 global.globalData       = new Map();
 global.usersData        = new Map();
@@ -38,7 +37,6 @@ global.commands         = new Map();
 global.nonPrefixCommands= new Map();
 global.eventCommands    = [];
 global.appState         = {};
-global.threadConfigs    = new Map();
 global.botApi           = null;
 
 const fs       = require("fs-extra");
@@ -57,9 +55,6 @@ global.log = {
   success: msg => console.log(chalk.green("[SUCCESS]"), msg),
 };
 
-
-// ─── Helpers ─────────────────────────────────────────────────
-global.getPrefix = tID => global.threadConfigs.get(tID)?.prefix || global.config.Prefix[0];
 
 // ─── Role Sets (تُبنى مرة واحدة، تُحدَّث عند reload) ──────────
 function buildRoleSets() {
