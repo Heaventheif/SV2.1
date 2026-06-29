@@ -30,6 +30,16 @@ const cacheSet = (k, v) => {
 // ─── المواقع المدعومة (للعرض فقط) ───────────────────────────
 const JS_SITES = ["NovelHi", "WtrLab"];
 
+// تُرفع عندما يُرجع HF Space عدة نتائج متشابهة (need_selection)
+// بدل تخمين أول نتيجة أو تجاهل الأمر — نعرضها كقائمة مرشحين على المستخدم
+class NeedsSelectionError extends Error {
+  constructor(candidates, site) {
+    super(`اختيار مطلوب بين ${candidates.length} نتيجة محتملة`);
+    this.candidates = candidates;
+    this.site = site;
+  }
+}
+
 // ─── ترجمة ────────────────────────────────────────────────────
 function splitLongParagraph(p, maxLen) {
   if (p.length <= maxLen) return [p];
@@ -79,13 +89,14 @@ async function translateBatchCached(key, paragraphs) {
 }
 
 // ─── الطلب لـ HF Space ────────────────────────────────────────
-async function fetchFromHF(novelName, chapterNum, preferredSite = null) {
-  const cacheKey = `hf:${novelName}:${chapterNum}:${preferredSite || "any"}`;
+async function fetchFromHF(novelName, chapterNum, preferredSite = null, novelId = null) {
+  const cacheKey = `hf:${novelName}:${chapterNum}:${preferredSite || "any"}:${novelId || "auto"}`;
   const cached = cacheGet(cacheKey);
   if (cached) return cached;
 
   const body = { novel: novelName, chapter: chapterNum };
   if (preferredSite) body.site = preferredSite;
+  if (novelId) body.novel_id = novelId;
 
   const res = await axios.post(`${HF_API}/novel`, body, {
     timeout: HF_TIMEOUT,
@@ -96,6 +107,10 @@ async function fetchFromHF(novelName, chapterNum, preferredSite = null) {
   if (res.status === 404) {
     const details = res.data?.details?.join("\n• ") || res.data?.error || "لا توجد تفاصيل";
     throw new Error(`لم يُعثر على الفصل:\n• ${details}`);
+  }
+  if (res.status === 200 && res.data?.need_selection) {
+    // عدة نتائج متشابهة — لا نخمّن، نرفع خطأ خاص يحمل المرشحين
+    throw new NeedsSelectionError(res.data.candidates || [], res.data.site || "");
   }
   if (res.status !== 200) {
     throw new Error(`HF API: خطأ ${res.status} — ${res.data?.error || "غير معروف"}`);
@@ -163,7 +178,9 @@ module.exports = {
           "أمثلة:\n" +
           "  .novel2 martial peak 3000\n" +
           "  .novel2 solo leveling 150 novelhi\n" +
-          "  .novel2 martial peak 3000 wtrlab"
+          "  .novel2 martial peak 3000 wtrlab\n\n" +
+          "إذا ظهرت نتائج متشابهة، أعد الإرسال مع id:<الرقم> مثل:\n" +
+          "  .novel2 martial peak 3000 id:12345"
     }
   },
 
@@ -184,8 +201,17 @@ module.exports = {
       );
     }
 
-    // تحليل الـ args: آخر arg قد يكون اسم موقع، قبله رقم الفصل
+    // تحليل الـ args: قد يحتوي على id:<رقم> (اختيار من قائمة مرشحين سابقة)
+    // وآخر arg قد يكون اسم موقع، قبله رقم الفصل
     let args_copy = [...args];
+    let novelId = null;
+
+    const idIndex = args_copy.findIndex(a => /^id:\d+$/i.test(a));
+    if (idIndex !== -1) {
+      novelId = args_copy[idIndex].split(":")[1];
+      args_copy.splice(idIndex, 1);
+    }
+
     let preferredSite = null;
 
     const lastArg = args_copy[args_copy.length - 1].toLowerCase();
@@ -227,9 +253,22 @@ module.exports = {
     let result = null;
     try {
       await updateStatus(`🌐 Playwright يفتح الصفحة...\n📖 ${novelName}\n📄 الفصل ${chapterNum}`);
-      result = await fetchFromHF(novelName, chapterNum, preferredSite);
+      result = await fetchFromHF(novelName, chapterNum, preferredSite, novelId);
       console.log(`[NOVEL2] ✅ ${result.siteName} نجح`);
     } catch (err) {
+      if (err instanceof NeedsSelectionError) {
+        const list = err.candidates
+          .map((c, i) => `${i + 1}. ${c.title}\n   id:${c.id}`)
+          .join("\n\n");
+        const selectMsg =
+          `🔎 وُجدت عدة نتائج متشابهة لـ "${novelName}" على ${err.site}:\n\n` +
+          `${list}\n\n` +
+          `💡 أعد إرسال الأمر مفرّقاً بإضافة id:<الرقم> في النهاية، مثال:\n` +
+          `.novel2 ${novelName} ${chapterNum} id:${err.candidates[0]?.id || ""}`;
+        try { if (statusId) await api.editMessage(selectMsg, statusId); else api.sendMessage(selectMsg, threadID, null, messageID); }
+        catch (_) { api.sendMessage(selectMsg, threadID, null, messageID); }
+        return;
+      }
       console.warn(`[NOVEL2] فشل: ${err.message}`);
       const errMsg =
         `❌ لم أجد الفصل\n\n` +
