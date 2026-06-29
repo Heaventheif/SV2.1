@@ -300,23 +300,18 @@ module.exports = {
 
     try { if (statusId) await api.unsendMessage(statusId); } catch (_) {}
 
-    // إرسال كرسالة واحدة أو مقطعة
-    // ملاحظة مهمة: كل جزء يُرسل بمحاولة مستقلة (try/catch خاص به)،
-    // لأن فشل جزء واحد بدون هذا كان يُسقط الـ promise كاملاً قبل
-    // الوصول لكود إرسال الملف بالأسفل — فيخسر المستخدم الرسالة والملف معًا.
+    // ① إرسال كأجزاء مقطعة دائمًا — لا نجرب رسالة واحدة أبدًا.
+    // السبب: sendAsync لا يرفع خطأ عند رفض فيسبوك للرسالة الطويلة بصمت،
+    // فكنّا نعتقد أن الرسالة وُصِّلت ونتجاوز sendAsChunks تمامًا.
     const fullText = header + translated.join("\n\n");
-    try {
-      await sendAsync(api, fullText, threadID, messageID);
-    } catch (_) {
-      const chunks = splitMessage(fullText);
-      for (let i = 0; i < chunks.length; i++) {
-        await new Promise(r => setTimeout(r, 800));
-        const suffix = chunks.length > 1 ? `\n\n${divider}\n📌 ${i + 1} / ${chunks.length}` : "";
-        try {
-          await sendAsync(api, chunks[i] + suffix, threadID, messageID);
-        } catch (err) {
-          console.warn(`[NOVEL2] فشل إرسال الجزء ${i + 1}/${chunks.length}: ${err.message?.substring(0, 100)}`);
-        }
+    const chunks = splitMessage(fullText);
+    for (let i = 0; i < chunks.length; i++) {
+      await new Promise(r => setTimeout(r, 800));
+      const suffix = chunks.length > 1 ? `\n\n${divider}\n📌 ${i + 1} / ${chunks.length}` : "";
+      try {
+        await sendAsync(api, chunks[i] + suffix, threadID, messageID);
+      } catch (err) {
+        console.warn(`[NOVEL2] فشل إرسال الجزء ${i + 1}/${chunks.length}: ${err.message?.substring(0, 100)}`);
       }
     }
 

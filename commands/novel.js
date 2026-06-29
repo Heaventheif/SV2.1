@@ -652,16 +652,14 @@ module.exports = {
     // حذف رسالة الحالة
     try { if (statusMsgId) await api.unsendMessage(statusMsgId, threadID); } catch (_) {}
 
-    // ① تجربة الإرسال كرسالة واحدة أولاً (قد يرفضها مسنجر لطولها)
-    const sentAsSingle = await trySendAsSingleMessage(api, threadID, messageID, header, translated);
-
-    // إذا فشلت الرسالة الواحدة، نرجع للتقسيم التقليدي كحل احتياطي
-    if (!sentAsSingle) {
-      try {
-        await sendAsChunks(api, threadID, messageID, header, translated, divider);
-      } catch (err) {
-        console.error("[NOVEL] فشل إرسال الرسائل المقطعة:", err.message);
-      }
+    // ① إرسال كأجزاء مقطعة دائمًا (1900 حرف/جزء)
+    // fca لا يرفع خطأ عند رفض فيسبوك للرسالة الطويلة بصمت،
+    // فكنّا نظن trySendAsSingle نجحت ونتجاوز sendAsChunks بالكامل.
+    // الحل: دائمًا sendAsChunks مباشرة.
+    try {
+      await sendAsChunks(api, threadID, messageID, header, translated, divider);
+    } catch (err) {
+      console.error("[NOVEL] فشل إرسال الرسائل المقطعة:", err.message);
     }
 
     // ② ثم إرسال كملف .txt
