@@ -104,7 +104,7 @@ async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4, listMsg
     );
 
     // حذف رسالة القائمة بعد نجاح الإرسال
-    if (listMsgId) { try { await api.unsendMessage(listMsgId); } catch (_) {} }
+    if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
     if (!wantMp4) sendMoodSticker(api, threadID);
 
   } catch (err) {

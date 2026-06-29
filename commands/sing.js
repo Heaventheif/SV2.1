@@ -76,7 +76,7 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track, lis
       )
     );
 
-    if (listMsgId) { try { await api.unsendMessage(listMsgId); } catch (_) {} }
+    if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
     if (originMsgID) react(api, originMsgID, threadID, "✅");
     sendMoodSticker(api, threadID);
 

@@ -63,7 +63,7 @@ async function downloadAndSend(api, threadID, messageID, youtubeUrl, wantMp4, li
       )
     );
 
-    if (listMsgId) { try { await api.unsendMessage(listMsgId); } catch (_) {} }
+    if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
     if (!wantMp4) sendMoodSticker(api, threadID);
 
   } catch (e) {

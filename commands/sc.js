@@ -160,7 +160,7 @@ async function sendTrack(api, threadID, messageID, track, listMsgId = null) {
       )
     );
 
-    if (listMsgId) { try { await api.unsendMessage(listMsgId); } catch (_) {} }
+    if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
     sendMoodSticker(api, threadID);
   } finally {
     if (filePath) cleanTemp(filePath);
