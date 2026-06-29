@@ -49,8 +49,4 @@ async function connectDB() {
   }
 }
 
-function getDB() {
-  return mongoose;
-}
-
-module.exports = { connectDB, getDB };
+module.exports = { connectDB };

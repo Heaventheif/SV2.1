@@ -36,30 +36,8 @@ UserSchema.methods.addXP = async function (amount) {
 };
 
 // ══════════════════════════════════════════════════
-//  2. مخطط المجموعة (GroupSchema)
-// ══════════════════════════════════════════════════
-const GroupSchema = new Schema(
-  {
-    threadId:   { type: String, required: true, unique: true, index: true },
-    name:       { type: String, default: "مجموعة", trim: true },
-    botEnabled: { type: Boolean, default: true },
-    prefix:     { type: String, default: null },
-    bannedUsers: { type: [String], default: [] },
-    settings: {
-      welcomeEnabled: { type: Boolean, default: false },
-      welcomeMessage: { type: String, default: null },
-      antiSpam:       { type: Boolean, default: false },
-      language:       { type: String, default: "ar" },
-    },
-    lastSeen: { type: Date, default: Date.now },
-  },
-  { timestamps: true, collection: "groups" }
-);
-
-// ══════════════════════════════════════════════════
 //  Exports
 // ══════════════════════════════════════════════════
 const UserModel  = mongoose.models.User  || mongoose.model("User",  UserSchema);
-const GroupModel = mongoose.models.Group || mongoose.model("Group", GroupSchema);
 
-module.exports = { UserModel, GroupModel };
+module.exports = { UserModel };
