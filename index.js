@@ -270,47 +270,43 @@ const handleMessage = async (api, event) => {
   if (cdMsg) { global.safeSend(api, cdMsg, threadID, null, messageID); return; }
   global.setCooldown(senderID, commandName, cd);
 
-  // ─── Execute (بالخلفية — لا await هنا لحماية التوازي) ────
+  // ─── Execute ──────────────────────────────────────────────
   // ⏳ تفاعل فوري يُعلم المستخدم أن البوت استلم الطلب
   try { api.setMessageReaction("⏳", messageID, threadID, () => {}, true); } catch (_) {}
 
-  // الـ promise تعمل بالخلفية — handleMessage يعود فوراً لاستقبال الطلب التالي
-  (async () => {
-    try {
-      const ctx = {
-        api, event, args,
-        message: {
-          // كل ردود الأوامر تمر عبر safeSend (queue مشترك + تأخير)
-          reply: (t, cb) => {
-            return new Promise((resolve) => {
-              global.safeSend(api, t, threadID, (err, info) => {
-                if (cb) cb(err, info);
-                resolve(info || {});
-              }, messageID);
-            });
-          },
-          unsend: (msgID) => {
-            try { api.unsendMessage(msgID, () => {}); } catch (_) {}
-          },
-          registerReply: (id, d, cb) => {
-            global.Kagenou.replies[id] = { callback: cb, author: senderID, timestamp: Date.now(), ...d };
-          }
-        },
-        prefix: "", usersData: global.usersData,
-        globalData: global.globalData, db: global.db,
-      };
-      if      (command.onStart) await command.onStart(ctx);
-      else if (command.run)     await command.run(ctx);
-      else if (command.execute) await command.execute(api, event, args, global.commands, "", global.config.admins, global.appState, t => global.safeSend(api, t, threadID, null, messageID), global.usersData, global.globalData);
-      // ✅ تفاعل نجاح بعد انتهاء الأمر
-      try { api.setMessageReaction("✅", messageID, threadID, () => {}, true); } catch (_) {}
-    } catch (err) {
-      console.error(`[CMD ERR] ${commandName}:`, err.message);
-      // ❌ تفاعل فشل
-      try { api.setMessageReaction("❌", messageID, threadID, () => {}, true); } catch (_) {}
-      global.safeSend(api, `❌ خطأ: ${err.message?.substring(0, 100)}`, threadID, null, messageID);
-    }
-  })();
+  const ctx = {
+    api, event, args,
+    message: {
+      reply: (t, cb) => {
+        return new Promise((resolve) => {
+          global.safeSend(api, t, threadID, (err, info) => {
+            if (cb) cb(err, info);
+            resolve(info || {});
+          }, messageID);
+        });
+      },
+      unsend: (msgID) => {
+        try { api.unsendMessage(msgID, () => {}); } catch (_) {}
+      },
+      registerReply: (id, d, cb) => {
+        global.Kagenou.replies[id] = { callback: cb, author: senderID, timestamp: Date.now(), ...d };
+      }
+    },
+    prefix: "", usersData: global.usersData,
+    globalData: global.globalData, db: global.db,
+  };
+
+  try {
+    if      (command.onStart) await command.onStart(ctx);
+    else if (command.run)     await command.run(ctx);
+    else if (command.execute) await command.execute(api, event, args, global.commands, "", global.config.admins, global.appState, t => global.safeSend(api, t, threadID, null, messageID), global.usersData, global.globalData);
+    // ✅ تفاعل نجاح بعد انتهاء الأمر
+    try { api.setMessageReaction("✅", messageID, threadID, () => {}, true); } catch (_) {}
+  } catch (err) {
+    console.error(`[CMD ERR] ${commandName}:`, err.message);
+    try { api.setMessageReaction("❌", messageID, threadID, () => {}, true); } catch (_) {}
+    global.safeSend(api, `❌ خطأ: ${err.message?.substring(0, 100)}`, threadID, null, messageID);
+  }
 };
 
 // ─── Reaction Handler ──────────────────────────────────────────
