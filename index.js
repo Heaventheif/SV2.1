@@ -58,84 +58,16 @@ global.eventCommands    = [];
 global.appState         = {};
 global.botApi           = null;
 
-// ─── Send Queue (تسلسلي لكل ثريد + تأخير لحماية الحساب) ─────
-// المعالجة تبقى بالتوازي — فقط لحظة الإرسال الفعلي تمر عبر هذا الـ queue
-// ⚠️ الطابور أصبح لكل threadID على حدة بدل طابور عام واحد:
-//    هكذا لا يتأخر رد مجموعة بسبب ازدحام مجموعة أخرى، بينما تبقى
-//    الرسائل داخل نفس المجموعة متسلسلة بفاصل ثابت لحماية الحساب.
-(() => {
-  const SEND_DELAY_MS = 1000; // تأخير ثانية واحدة بين كل رسالتين بنفس الثريد
-  const _queues = new Map(); // threadID -> { items: [], running: bool }
+// ─── إرسال مباشر فوري (بلا طابور، بلا تأخير، بلا حدود) ───────
+// global.safeSend هنا مجرد اسم متوافق مع باقي الكود — لا يضيف أي
+// تأخير أو طابور، يرسل فوراً عبر api.sendMessage مباشرة.
+global.safeSend = (api, body, threadID, callback, messageID) => {
+  if (messageID !== undefined) return api.sendMessage(body, threadID, callback, messageID);
+  return api.sendMessage(body, threadID, callback);
+};
 
-  async function _runQueue(threadID) {
-    const q = _queues.get(threadID);
-    if (!q || q.running) return;
-    q.running = true;
-    while (q.items.length > 0) {
-      const { api, body, callback, messageID } = q.items.shift();
-      try {
-        await new Promise((resolve) => {
-          if (messageID !== undefined) {
-            api.sendMessage(body, threadID, (err, info) => {
-              if (callback) callback(err, info);
-              resolve();
-            }, messageID);
-          } else {
-            api.sendMessage(body, threadID, (err, info) => {
-              if (callback) callback(err, info);
-              resolve();
-            });
-          }
-        });
-      } catch (e) {
-        console.error("[SEND_QUEUE] خطأ أثناء الإرسال:", e.message);
-      }
-      if (q.items.length > 0) {
-        await new Promise(r => setTimeout(r, SEND_DELAY_MS));
-      }
-    }
-    q.running = false;
-    // إزالة الطابور الفارغ لتفادي تراكم مفاتيح Map بلا داعٍ
-    if (q.items.length === 0) _queues.delete(threadID);
-  }
-
-  /**
-   * global.safeSend(api, body, threadID, callback?, messageID?)
-   * نفس توقيع api.sendMessage تماماً — تُضاف لطابور خاص بالـ threadID وتُرسَل بالتسلسل
-   * بينما المعالجة (fetchHTML, translateBatch, إلخ) تبقى بالتوازي كما هي
-   */
-  global.safeSend = (api, body, threadID, callback, messageID) => {
-    if (!_queues.has(threadID)) _queues.set(threadID, { items: [], running: false });
-    _queues.get(threadID).items.push({ api, body, callback, messageID });
-    _runQueue(threadID);
-  };
-
-  // يفيد في عرض حالة الطوابير ضمن /health عند الحاجة
-  global.getSendQueueStats = () => {
-    let pending = 0;
-    for (const q of _queues.values()) pending += q.items.length;
-    return { activeThreads: _queues.size, pendingMessages: pending };
-  };
-})();
-
-// ─── تغليف api.sendMessage تلقائياً ──────────────────────────
-// بعض ملفات commands تستدعي api.sendMessage مباشرة بدل safeSend،
-// فيتجاوز ذلك حماية التأخير بين الرسائل. الحل: ننشئ نسخة "آمنة" من
-// api تُمرَّر للأوامر، تُحوِّل أي api.sendMessage تلقائياً إلى safeSend
-// دون الحاجة لتعديل كل ملف أمر يدوياً.
-function wrapApiForSafety(api) {
-  if (!api || api.__safeWrapped) return api;
-  const safeApi = Object.create(api);
-  safeApi.__safeWrapped = true;
-  safeApi.sendMessage = function (body, threadID, callback, messageID) {
-    global.safeSend(api, body, threadID, callback, messageID);
-    // إرجاع Promise متوافق مع الأنماط التي تستخدم await api.sendMessage(...)
-    return new Promise((resolve) => {
-      global.safeSend(api, body, threadID, (err, info) => resolve(info || {}), messageID);
-    });
-  };
-  return safeApi;
-}
+// لا تغليف على api — يُستخدم كما هو دون أي اعتراض على sendMessage
+function wrapApiForSafety(api) { return api; }
 global.wrapApiForSafety = wrapApiForSafety;
 
 const fs       = require("fs-extra");
@@ -252,25 +184,6 @@ try {
   }
 } catch { }
 
-// ─── Rate limiting عام لكل مستخدم (بالإضافة لـ cooldown لكل أمر) ──
-// يمنع تبديل سريع بين عدة أوامر مختلفة لإغراق طابور الإرسال
-const RATE_WINDOW_MS = 10 * 1000; // نافذة 10 ثوانٍ
-const RATE_MAX_CMDS  = 5;         // أقصى 5 أوامر لكل مستخدم كل 10 ثوانٍ
-global.userRateLog = new Map(); // uid -> [timestamps]
-
-function isRateLimited(uid) {
-  const now = Date.now();
-  let arr = global.userRateLog.get(uid) || [];
-  arr = arr.filter(t => now - t < RATE_WINDOW_MS);
-  if (arr.length >= RATE_MAX_CMDS) {
-    global.userRateLog.set(uid, arr);
-    return true;
-  }
-  arr.push(now);
-  global.userRateLog.set(uid, arr);
-  return false;
-}
-
 // ─── Message Handler ─────────────────────────────────────────
 const handleMessage = async (rawApi, event) => {
   const { threadID, senderID, body, messageReply, messageID } = event;
@@ -333,12 +246,6 @@ const handleMessage = async (rawApi, event) => {
   const reqRole = command.config?.role ?? 0;
   if (role < reqRole) {
     global.safeSend(api, "⚠️ هذا الأمر للمشرفين فقط", threadID, null, messageID);
-    return;
-  }
-
-  // ─── Rate limit عام (قبل أي معالجة أخرى) ──────────────────
-  if (isRateLimited(senderID)) {
-    global.safeSend(api, "⚠️ أوامر كثيرة جداً بسرعة — انتظر قليلاً", threadID, null, messageID);
     return;
   }
 
@@ -500,7 +407,6 @@ function startWebServer() {
       commands:  global.commands.size,
       uptime:    Math.floor(process.uptime()),
       memory:    `${Math.round(process.memoryUsage().rss / 1024 / 1024)} MB`,
-      sendQueue: global.getSendQueueStats ? global.getSendQueueStats() : null,
       timestamp: new Date().toISOString(),
     });
   }
@@ -843,12 +749,6 @@ function onLoginSuccess(api) {
       if (now - ts > 10 * 60 * 1000) {
         delete global.client.reactionListener[msgID]; cleaned++;
       }
-    }
-    // تنظيف سجل rate limit القديم
-    for (const [uid, arr] of global.userRateLog.entries()) {
-      const fresh = arr.filter(t => now - t < RATE_WINDOW_MS);
-      if (fresh.length === 0) global.userRateLog.delete(uid);
-      else global.userRateLog.set(uid, fresh);
     }
     // تنظيف الملفات المؤقتة اليتيمة في os.tmpdir()
     cleanupOrphanTempFiles();
