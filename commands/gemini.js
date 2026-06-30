@@ -60,11 +60,11 @@ async function handle(api, event, prompt, registerReply) {
 
   if (prompt.trim().toLowerCase() === "clear" || prompt.trim() === "مسح") {
     try { await Session.findByIdAndDelete(sessionKey); } catch (_) {}
-    return api.sendMessage("🧹 تم مسح ذاكرة المجموعة.", threadID, null, messageID);
+    return global.safeSend(api, "🧹 تم مسح ذاكرة المجموعة.", threadID, null, messageID);
   }
 
   if (!prompt.trim()) {
-    return api.sendMessage(
+    return global.safeSend(api, 
       "🤖 Sunken AI\n\nأرسل سؤالك مع الأمر\nمثال: .gemini ما هي عاصمة فرنسا؟\n.gemini مسح — لمسح ذاكرة المجموعة",
       threadID, null, messageID
     );
@@ -96,10 +96,10 @@ async function handle(api, event, prompt, registerReply) {
     const msg = e.message?.includes("HF_SPACE_URL")
       ? "❌ HF_SPACE_URL غير مضبوط في متغيرات البيئة."
       : "❌ الخادم غير متاح حالياً، حاول لاحقاً.";
-    return api.sendMessage(msg, threadID, null, messageID);
+    return global.safeSend(api, msg, threadID, null, messageID);
   }
 
-  api.sendMessage(reply, threadID, (err, info) => {
+  global.safeSend(api, reply, threadID, (err, info) => {
     if (err || !info) return;
     if (registerReply) {
       registerReply(info.messageID, { author: senderID }, async ({ api, event }) => {

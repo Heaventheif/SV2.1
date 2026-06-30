@@ -126,7 +126,7 @@ async function sendBoardImage(api, threadID, messageID, imageBase64, caption) {
     const stream = Readable.from(buf);
     stream.path  = "chess_board.png";
     await new Promise((res, rej) =>
-      api.sendMessage(
+      global.safeSend(api, 
         { body: caption, attachment: stream },
         threadID,
         (err, info) => err ? rej(err) : res(info),
@@ -134,7 +134,7 @@ async function sendBoardImage(api, threadID, messageID, imageBase64, caption) {
       )
     );
   } catch {
-    api.sendMessage(caption + "\n⚠️ (تعذّر إرسال الصورة)", threadID, null, messageID);
+    global.safeSend(api, caption + "\n⚠️ (تعذّر إرسال الصورة)", threadID, null, messageID);
   }
 }
 
@@ -209,7 +209,7 @@ module.exports = {
 
     // ─── chess help ─────────────────────────────────────────
     if (text === "chess help" || text === "شطرنج مساعدة") {
-      return api.sendMessage(CHESS_RULES, threadID, null, messageID);
+      return global.safeSend(api, CHESS_RULES, threadID, null, messageID);
     }
 
     // ─── resign / استسلام ───────────────────────────────────
@@ -222,7 +222,7 @@ module.exports = {
       const winnerLabel = winnerId === "bot"
         ? "🤖 البوت"
         : `اللاعب ${String(winnerId).slice(-4)}`;
-      return api.sendMessage(
+      return global.safeSend(api, 
         `🏳️ استسلم اللاعب!\n🏆 الفائز: ${winnerLabel}`,
         threadID, null, messageID
       );
@@ -249,7 +249,7 @@ module.exports = {
     try {
       result = await callChessEngine(game.fen, move, isBotGame, game.difficulty || DEFAULT_DIFFICULTY);
     } catch (err) {
-      return api.sendMessage(
+      return global.safeSend(api, 
         `⚠️ فشل الاتصال بسيرفر الشطرنج\n${err.message?.substring(0, 80)}`,
         threadID, null, messageID
       );
@@ -257,7 +257,7 @@ module.exports = {
 
     // ─── نقلة غير قانونية ───────────────────────────────────
     if (result.illegal_move_error) {
-      return api.sendMessage(result.illegal_move_error, threadID, null, messageID);
+      return global.safeSend(api, result.illegal_move_error, threadID, null, messageID);
     }
 
     // ─── تحديث DB ───────────────────────────────────────────
@@ -328,12 +328,12 @@ module.exports = {
 
     // ─── chess help ─────────────────────────────────────────
     if (["help", "مساعدة", "قواعد"].includes(joinedArgs)) {
-      return api.sendMessage(CHESS_RULES, threadID, null, messageID);
+      return global.safeSend(api, CHESS_RULES, threadID, null, messageID);
     }
 
     // ─── chess بدون args ────────────────────────────────────
     if (!joinedArgs && !messageReply && !Object.keys(mentions || {}).length) {
-      return api.sendMessage(
+      return global.safeSend(api, 
         "♟️ بوت الشطرنج\n\n" +
         "  chess bot      — ضد البوت (متوسط)\n" +
         "  chess bot 1-5  — ضد البوت بمستوى صعوبة\n" +
@@ -347,7 +347,7 @@ module.exports = {
     // ─── تحقق من لعبة نشطة ──────────────────────────────────
     const existingGame = await findActiveGame(threadID, senderID);
     if (existingGame) {
-      return api.sendMessage(
+      return global.safeSend(api, 
         "⚠️ لديك مباراة نشطة!\nاكتب resign لإنهائها أولاً.",
         threadID, null, messageID
       );
@@ -372,11 +372,11 @@ module.exports = {
     } else if (messageReply) {
       opponentID = messageReply.senderID;
       if (!opponentID || opponentID === senderID)
-        return api.sendMessage("❌ لا يمكنك تحدي نفسك!", threadID, null, messageID);
+        return global.safeSend(api, "❌ لا يمكنك تحدي نفسك!", threadID, null, messageID);
       opponentLabel = `اللاعب ${String(opponentID).slice(-4)}`;
 
     } else {
-      return api.sendMessage(
+      return global.safeSend(api, 
         "❌ حدد منافسك:\n  chess bot — ضد البوت\n  chess @شخص — ضد لاعب",
         threadID, null, messageID
       );
@@ -386,7 +386,7 @@ module.exports = {
     if (opponentID !== "bot") {
       const oppGame = await findActiveGame(threadID, opponentID);
       if (oppGame)
-        return api.sendMessage("⚠️ هذا اللاعب لديه مباراة نشطة بالفعل!", threadID, null, messageID);
+        return global.safeSend(api, "⚠️ هذا اللاعب لديه مباراة نشطة بالفعل!", threadID, null, messageID);
     }
 
     // ─── تحديد الألوان عشوائياً ─────────────────────────────
@@ -464,7 +464,7 @@ module.exports = {
     if (startImageB64) {
       await sendBoardImage(api, threadID, messageID, startImageB64, caption);
     } else {
-      api.sendMessage(caption, threadID, null, messageID);
+      global.safeSend(api, caption, threadID, null, messageID);
     }
   }
 };

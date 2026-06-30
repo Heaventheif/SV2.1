@@ -68,7 +68,7 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track, lis
     if (size > 26214400) throw new Error("الملف أكبر من 25MB.");
 
     await new Promise((resolve, reject) =>
-      api.sendMessage(
+      global.safeSend(api, 
         { body: `🎵 ${track.title}`, attachment: fs.createReadStream(filePath) },
         threadID,
         err => err ? reject(err) : resolve(),
@@ -87,7 +87,7 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track, lis
     else if (error.code === 'ECONNABORTED')   msg = "❌ انتهت مهلة التحميل.";
     else if (error.message.includes("يُرجع")) msg = "❌ فشل الـ API في إرجاع رابط التحميل.";
     else                                      msg = "❌ فشل التحميل، قد يكون المحتوى محمياً.";
-    api.sendMessage(msg, threadID, null, messageID);
+    global.safeSend(api, msg, threadID, null, messageID);
   } finally {
     fs.remove(filePath).catch(() => {});
   }
@@ -153,7 +153,7 @@ module.exports = {
       const items = res.data?.result || [];
       if (items.length === 0) {
         react(api, messageID, threadID, "❌");
-        return api.sendMessage("❌ لم يتم العثور على نتائج.", threadID, null, messageID);
+        return global.safeSend(api, "❌ لم يتم العثور على نتائج.", threadID, null, messageID);
       }
 
       const allTracks = [];
@@ -165,7 +165,7 @@ module.exports = {
 
       if (allTracks.length === 0) {
         react(api, messageID, threadID, "❌");
-        return api.sendMessage("❌ فشل استخراج الروابط.", threadID, null, messageID);
+        return global.safeSend(api, "❌ فشل استخراج الروابط.", threadID, null, messageID);
       }
 
       if (!showList) {
@@ -181,7 +181,7 @@ module.exports = {
       msg += `تفاعل بالإيموجي لاختيار الأغنية\n⏳ تنتهي بعد دقيقتين.`;
 
       const sent = await new Promise((res, rej) =>
-        api.sendMessage(msg, threadID, (err, info) => err ? rej(err) : res(info), messageID)
+        global.safeSend(api, msg, threadID, (err, info) => err ? rej(err) : res(info), messageID)
       );
 
       global.soundcloudSearchSessions[senderID] = {
@@ -217,8 +217,8 @@ module.exports = {
     } catch (error) {
       react(api, messageID, threadID, "❌");
       if (error.code === 'ECONNABORTED' || error.message.includes('timeout'))
-        return api.sendMessage("❌ انتهت مهلة البحث، حاول مرة أخرى.", threadID, null, messageID);
-      api.sendMessage("❌ خطأ أثناء البحث.", threadID, null, messageID);
+        return global.safeSend(api, "❌ انتهت مهلة البحث، حاول مرة أخرى.", threadID, null, messageID);
+      global.safeSend(api, "❌ خطأ أثناء البحث.", threadID, null, messageID);
     }
   },
 };

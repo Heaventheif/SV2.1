@@ -118,13 +118,13 @@ async function handle(api, event, prompt, registerReply) {
 
   if (["clear","مسح","reset"].includes(prompt.trim().toLowerCase())) {
     try { await Session.findByIdAndDelete(sessionKey); } catch (_) {}
-    return api.sendMessage("🧹 تم مسح ذاكرة المجموعة.", threadID, null, messageID);
+    return global.safeSend(api, "🧹 تم مسح ذاكرة المجموعة.", threadID, null, messageID);
   }
 
   const attachment = detectAttachment(event);
 
   if (!prompt.trim() && !attachment) {
-    return api.sendMessage(
+    return global.safeSend(api, 
       "❓ اكتب سؤالك أو أرسل صورة/صوت/فيديو!\n" +
       "مثال: .ai2 ما هي عاصمة فرنسا؟\n" +
       ".ai2 مسح — لمسح ذاكرة المجموعة",
@@ -145,7 +145,7 @@ async function handle(api, event, prompt, registerReply) {
   let statusMsgId = null;
   try {
     const sent = await new Promise((resolve, reject) =>
-      api.sendMessage(
+      global.safeSend(api, 
         attachment
           ? `⏳ جاري تحليل ${attachment.kind === "image" ? "الصورة 🖼️" : attachment.kind === "audio" ? "الصوت 🎵" : "الفيديو 🎬"}...`
           : "⏳ جاري المعالجة...",

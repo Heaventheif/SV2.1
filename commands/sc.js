@@ -152,7 +152,7 @@ async function sendTrack(api, threadID, messageID, track, listMsgId = null) {
       `\n🔊 ${result.isSnipped ? "مقطع Preview 30ث" : "بث كامل"} — SoundCloud`;
 
     await new Promise((res, rej) =>
-      api.sendMessage(
+      global.safeSend(api, 
         { body, attachment: fs.createReadStream(filePath) },
         threadID,
         err => err ? rej(err) : res(),
@@ -213,7 +213,7 @@ module.exports = {
         text += `تفاعل بالإيموجي لاختيار الأغنية\n⏳ تنتهي بعد دقيقتين`;
 
         const sent = await new Promise((res, rej) =>
-          api.sendMessage(text, threadID, (err, info) => err ? rej(err) : res(info), messageID)
+          global.safeSend(api, text, threadID, (err, info) => err ? rej(err) : res(info), messageID)
         );
 
         if (sent?.messageID && global.client?.reactionListener) {
@@ -239,7 +239,7 @@ module.exports = {
 
     } catch (err) {
       console.error("[sc] خطأ:", err.message);
-      api.sendMessage(`❌ ${err.message?.substring(0, 200) || "خطأ غير معروف"}`, threadID, null, messageID);
+      global.safeSend(api, `❌ ${err.message?.substring(0, 200) || "خطأ غير معروف"}`, threadID, null, messageID);
     }
   },
 };

@@ -64,7 +64,7 @@ module.exports = {
 
       const rawResults = response.data?.result;
       if (!rawResults || rawResults.length === 0) {
-        return api.sendMessage("❌ لم أجد نتائج للبحث", threadID, null, messageID);
+        return global.safeSend(api, "❌ لم أجد نتائج للبحث", threadID, null, messageID);
       }
 
       const imageUrls = rawResults
@@ -73,7 +73,7 @@ module.exports = {
         .filter(Boolean);
 
       if (imageUrls.length === 0) {
-        return api.sendMessage("❌ لم أجد روابط صور صالحة", threadID, null, messageID);
+        return global.safeSend(api, "❌ لم أجد روابط صور صالحة", threadID, null, messageID);
       }
 
       const tmpFiles = [];
@@ -98,7 +98,7 @@ module.exports = {
 
       const validFiles = tmpFiles.filter(Boolean);
       if (validFiles.length === 0) {
-        return api.sendMessage("❌ فشل تحميل جميع الصور", threadID, null, messageID);
+        return global.safeSend(api, "❌ فشل تحميل جميع الصور", threadID, null, messageID);
       }
 
       for (let i = 0; i < validFiles.length; i += MAX_PER_GROUP) {
@@ -111,7 +111,7 @@ module.exports = {
           ? `📌 ${query} (${groupNum}/${totalGroups})`
           : `📌 ${query} — ${validFiles.length} صورة`;
 
-        await api.sendMessage({
+        await global.safeSend(api, {
           body,
           attachment: group.map(f => fs.createReadStream(f))
         }, threadID, null, isFirst ? messageID : null);
@@ -124,7 +124,7 @@ module.exports = {
 
     } catch (error) {
       console.error("[PINTEREST ERROR]", error.message);
-      api.sendMessage(`❌ فشل: ${error.message?.substring(0, 80)}`, threadID, null, messageID);
+      global.safeSend(api, `❌ فشل: ${error.message?.substring(0, 80)}`, threadID, null, messageID);
     }
   }
 };

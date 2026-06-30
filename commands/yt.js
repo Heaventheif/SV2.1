@@ -95,7 +95,7 @@ async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4, listMsg
       `\n🎚 ${wantMp4 ? "360p" : "128kbps"}`;
 
     await new Promise((res, rej) =>
-      api.sendMessage(
+      global.safeSend(api, 
         { body, attachment: dl.stream },
         threadID,
         err => err ? rej(err) : res(),
@@ -117,7 +117,7 @@ async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4, listMsg
         msg = JSON.parse(t).error || msg;
       } catch (_) {}
     }
-    api.sendMessage(`❌ ${msg.substring(0, 160)}`, threadID, null, messageID);
+    global.safeSend(api, `❌ ${msg.substring(0, 160)}`, threadID, null, messageID);
   } finally {
     await cleanTemp(filePath);
   }
@@ -187,7 +187,7 @@ module.exports = {
         const results = await ytSearch(query, 1);
         return await downloadAndSend(api, threadID, messageID, results[0].url, wantMp4);
       } catch (e) {
-        return api.sendMessage(`❌ ${e.message}`, threadID, null, messageID);
+        return global.safeSend(api, `❌ ${e.message}`, threadID, null, messageID);
       }
     }
 
@@ -196,7 +196,7 @@ module.exports = {
       const list    = results.slice(0, 10);
 
       const sent = await new Promise((res, rej) =>
-        api.sendMessage(buildListText(list, wantMp4), threadID,
+        global.safeSend(api, buildListText(list, wantMp4), threadID,
           (err, info) => err ? rej(err) : res(info), messageID)
       );
 
@@ -225,7 +225,7 @@ module.exports = {
         }
       }
     } catch (e) {
-      api.sendMessage(`❌ ${e.message?.substring(0, 150) || "خطأ في البحث"}`, threadID, null, messageID);
+      global.safeSend(api, `❌ ${e.message?.substring(0, 150) || "خطأ في البحث"}`, threadID, null, messageID);
     }
   },
 };

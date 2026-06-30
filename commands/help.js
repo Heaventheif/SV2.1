@@ -65,7 +65,7 @@ module.exports = {
     const commandsDir = path.join(__dirname);
 
     if (!fs.existsSync(commandsDir))
-      return api.sendMessage("❌ مجلد الأوامر غير موجود", threadID, null, messageID);
+      return global.safeSend(api, "❌ مجلد الأوامر غير موجود", threadID, null, messageID);
 
     // ── تحميل الأوامر ──────────────────────────────────────────
     const commandFiles = fs.readdirSync(commandsDir).filter(f => f.endsWith(".js"));
@@ -103,7 +103,7 @@ module.exports = {
     if (args.length > 0 && args[0].toLowerCase() !== "all") {
       const cmdName = args[0].toLowerCase();
       const cmd = loadedCommands.get(cmdName);
-      if (!cmd) return api.sendMessage(`❌ الأمر "${cmdName}" غير موجود`, threadID, null, messageID);
+      if (!cmd) return global.safeSend(api, `❌ الأمر "${cmdName}" غير موجود`, threadID, null, messageID);
 
       const info =
         `📌 الأمر: .${cmd.name}\n` +
@@ -114,7 +114,7 @@ module.exports = {
         `⏱ كولداون  : ${cmd.countDown} ثانية\n` +
         `🔐 الصلاحية: ${getRoleName(cmd.role)}`;
 
-      return api.sendMessage(info, threadID, null, messageID);
+      return global.safeSend(api, info, threadID, null, messageID);
     }
 
     // ── قائمة بسيطة (all) ──────────────────────────────────────
@@ -122,7 +122,7 @@ module.exports = {
       const names = [...loadedCommands.keys()].sort();
       let msg = `📋 جميع الأوامر (${names.length}):\n━━━━━━━━━━━━━━━━━━━━\n`;
       names.forEach((n, i) => { msg += `${i + 1}. .${n}\n`; });
-      return api.sendMessage(msg, threadID, null, messageID);
+      return global.safeSend(api, msg, threadID, null, messageID);
     }
 
     // ── القائمة الرئيسية المصنفة ───────────────────────────────
@@ -188,7 +188,7 @@ module.exports = {
       `  help all   ←  القائمة البسيطة\n` +
       `${LINE}`;
 
-    return api.sendMessage(message, threadID, null, messageID);
+    return global.safeSend(api, message, threadID, null, messageID);
   }
 };
 

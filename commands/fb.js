@@ -45,7 +45,7 @@ async function downloadAndSend(api, event, fbUrl, quality = "worst", label = "")
       await fs.writeFile(tmpFile, buffer);
 
       await new Promise((res, rej) =>
-        api.sendMessage(
+        global.safeSend(api, 
           { body: `🎬 ${result.title || "فيديو فيسبوك"}${label}`.trim(), attachment: fs.createReadStream(tmpFile) },
           threadID, (err) => err ? rej(err) : res()
         )
@@ -53,7 +53,7 @@ async function downloadAndSend(api, event, fbUrl, quality = "worst", label = "")
 
     } else if (result.video_url) {
       // ─── HF أرجع رابط مباشر (نادر) ──────────────────────
-      await api.sendMessage(
+      await global.safeSend(api, 
         `🎬 ${result.title || "فيديو فيسبوك"}\n🔗 ${result.video_url}`,
         threadID, null, null
       );

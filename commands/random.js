@@ -36,7 +36,7 @@ module.exports = {
     const { threadID, messageID } = event;
 
     if (!TUMBLR_API_KEY)
-      return api.sendMessage("⚠️ TUMBLR_API_KEY غير مضبوط", threadID, null, messageID);
+      return global.safeSend(api, "⚠️ TUMBLR_API_KEY غير مضبوط", threadID, null, messageID);
 
     react(api, messageID, threadID, "🤖");
     const tmpFile = path.join(os.tmpdir(), `tumblr_${Date.now()}.mp4`);
@@ -69,7 +69,7 @@ module.exports = {
 
       if (!videoUrl) {
         react(api, messageID, threadID, "❌");
-        return api.sendMessage("❌ لم أجد فيديو الآن — حاول مرة أخرى", threadID, null, messageID);
+        return global.safeSend(api, "❌ لم أجد فيديو الآن — حاول مرة أخرى", threadID, null, messageID);
       }
 
       const dlResponse = await axios.get(videoUrl, {
@@ -80,7 +80,7 @@ module.exports = {
 
       if (dlResponse.status !== 200) {
         react(api, messageID, threadID, "✅");
-        return api.sendMessage(
+        return global.safeSend(api, 
           `🎬 ${caption || "فيديو عشوائي"}\n📺 @${blogName}\n\n🔗 ${postUrl}`,
           threadID, null, messageID
         );
@@ -97,19 +97,19 @@ module.exports = {
 
       if (sizeMB < 0.01) {
         react(api, messageID, threadID, "❌");
-        return api.sendMessage("❌ الفيديو فارغ — حاول مرة أخرى", threadID, null, messageID);
+        return global.safeSend(api, "❌ الفيديو فارغ — حاول مرة أخرى", threadID, null, messageID);
       }
 
       if (sizeMB > 25) {
         react(api, messageID, threadID, "✅");
-        return api.sendMessage(
+        return global.safeSend(api, 
           `🎬 ${caption || "فيديو عشوائي"}\n📺 @${blogName}\n💾 ${sizeMB.toFixed(1)}MB\n\n🔗 ${postUrl}`,
           threadID, null, messageID
         );
       }
 
       await new Promise((resolve, reject) =>
-        api.sendMessage(
+        global.safeSend(api, 
           { body: `🎬 ${caption || "فيديو عشوائي"}\n📺 @${blogName}`, attachment: fs.createReadStream(tmpFile) },
           threadID, (err) => err ? reject(err) : resolve(), messageID
         )
@@ -124,7 +124,7 @@ module.exports = {
       else if (error.response?.status === 429) errMsg += "⚠️ تجاوزت حد الطلبات";
       else if (error.code === "ECONNABORTED")  errMsg += "⏱ انتهت مهلة الانتظار";
       else errMsg += error.message?.substring(0, 150) || "خطأ غير معروف";
-      api.sendMessage(errMsg, threadID, null, messageID);
+      global.safeSend(api, errMsg, threadID, null, messageID);
     } finally {
       try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (_) {}
     }

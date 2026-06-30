@@ -23,9 +23,9 @@ module.exports = {
 
       const translated = await translateToArabic(fact);
 
-      api.sendMessage(`🐱 حقيقة عن القطط\n\n${translated}`, threadID, null, messageID);
+      global.safeSend(api, `🐱 حقيقة عن القطط\n\n${translated}`, threadID, null, messageID);
     } catch {
-      api.sendMessage("❌ فشل جلب الحقيقة — حاول مرة أخرى", threadID, null, messageID);
+      global.safeSend(api, "❌ فشل جلب الحقيقة — حاول مرة أخرى", threadID, null, messageID);
     }
   }
 };

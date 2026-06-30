@@ -15,7 +15,7 @@ module.exports = {
     const { threadID, messageID, messageReply, body } = event;
     
     if (args.length === 0) {
-      return api.sendMessage("❌ الاستخدام: tr <رمز_اللغة> <النص>\nأو: رد على رسالة واكتب tr <رمز_اللغة>", threadID, null, messageID);
+      return global.safeSend(api, "❌ الاستخدام: tr <رمز_اللغة> <النص>\nأو: رد على رسالة واكتب tr <رمز_اللغة>", threadID, null, messageID);
     }
 
     const targetLang = args[0].toLowerCase();
@@ -26,7 +26,7 @@ module.exports = {
     } else if (messageReply && messageReply.body) {
       textToTranslate = messageReply.body;
     } else {
-      return api.sendMessage("❌ الرجاء كتابة النص أو الرد على رسالة لترجمتها", threadID, null, messageID);
+      return global.safeSend(api, "❌ الرجاء كتابة النص أو الرد على رسالة لترجمتها", threadID, null, messageID);
     }
 
     try {
@@ -50,13 +50,13 @@ module.exports = {
 
       if (!translatedText) throw new Error("لم تُرجع الترجمة أي نص.");
 
-      await api.sendMessage(translatedText, threadID, null, messageID);
+      await global.safeSend(api, translatedText, threadID, null, messageID);
 
     } catch (error) {
       const msg = error.code === "ECONNABORTED" || error.message?.includes("timeout")
         ? "⏱️ انتهت مهلة الاتصال بخدمة الترجمة"
         : `❌ خطأ في الترجمة: ${error.message}`;
-      await api.sendMessage(msg, threadID, null, messageID);
+      await global.safeSend(api, msg, threadID, null, messageID);
     }
   }
 };

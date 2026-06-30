@@ -165,7 +165,7 @@ module.exports = {
     let statusMsgId = null;
     try {
       const sent = await new Promise((resolve, reject) =>
-        api.sendMessage(
+        global.safeSend(api, 
           `🎙️ جارٍ تحويل النص بصوت ${voice}...`,
           threadID,
           (err, info) => err ? reject(err) : resolve(info),
@@ -185,7 +185,7 @@ module.exports = {
       await fs.writeFile(filePath, buffer);
 
       await new Promise((resolve, reject) =>
-        api.sendMessage(
+        global.safeSend(api, 
           { body: `🎙️ الصوت: ${voice}`, attachment: fs.createReadStream(filePath) },
           threadID,
           err => err ? reject(err) : resolve()

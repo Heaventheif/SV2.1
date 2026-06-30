@@ -44,7 +44,7 @@ module.exports = {
     const log = (this._dailyAddLog.get(senderID) || []).filter(t => now - t < this._DAY_MS);
     if (log.length >= this._DAILY_LIMIT) {
       const waitMin = Math.ceil((this._DAY_MS - (now - log[0])) / 60000);
-      return api.sendMessage(
+      return global.safeSend(api, 
         `⚠️ وصلت للحد الأقصى (${this._DAILY_LIMIT} إضافات/يوم) لحماية الحساب من الحظر.\n⏳ حاول بعد ${waitMin} دقيقة تقريباً.`,
         threadID, null, messageID
       );
@@ -55,18 +55,18 @@ module.exports = {
     try {
       threadInfo = await api.getThreadInfo(threadID);
     } catch (e) {
-      return api.sendMessage("❌ فشل في جلب معلومات المجموعة.", threadID, null, messageID);
+      return global.safeSend(api, "❌ فشل في جلب معلومات المجموعة.", threadID, null, messageID);
     }
     if (!threadInfo.adminIDs.some(admin => admin.id === senderID)) {
-      return api.sendMessage("❌ هذا الأمر لمشرفي المجموعة فقط!", threadID, null, messageID);
+      return global.safeSend(api, "❌ هذا الأمر لمشرفي المجموعة فقط!", threadID, null, messageID);
     }
 
     const input = args.join(" ").trim();
     if (!input) {
-      return api.sendMessage("❌ الاستخدام:\n.adduser [UID] أو [رابط فيسبوك] أو [يوزرنيم]", threadID, null, messageID);
+      return global.safeSend(api, "❌ الاستخدام:\n.adduser [UID] أو [رابط فيسبوك] أو [يوزرنيم]", threadID, null, messageID);
     }
 
-    const waitMsg = await api.sendMessage("🔄 جاري المعالجة...", threadID, null, messageID);
+    const waitMsg = await global.safeSend(api, "🔄 جاري المعالجة...", threadID, null, messageID);
     const editMsg = async (text) => {
       try { await api.editMessage(text, waitMsg.messageID, threadID); } catch (_) {}
     };
@@ -128,7 +128,7 @@ module.exports = {
       this._dailyAddLog.set(senderID, log);
       const remaining = Math.max(0, this._DAILY_LIMIT - log.length);
       if (remaining <= 2) {
-        await api.sendMessage(`ℹ️ تبقى لك ${remaining} عملية إضافة اليوم.`, threadID, null, messageID);
+        await global.safeSend(api, `ℹ️ تبقى لك ${remaining} عملية إضافة اليوم.`, threadID, null, messageID);
       }
 
     } catch (error) {

@@ -83,11 +83,11 @@ async function handle(api, event, args, registerReply) {
   // مسح الذاكرة
   if (["clear", "مسح", "reset"].includes(prompt.toLowerCase())) {
     try { await Session.findByIdAndDelete(sessionKey); } catch (_) {}
-    return api.sendMessage("🧹 تم مسح ذاكرة المجموعة.", threadID, null, messageID);
+    return global.safeSend(api, "🧹 تم مسح ذاكرة المجموعة.", threadID, null, messageID);
   }
 
   if (!prompt) {
-    return api.sendMessage(
+    return global.safeSend(api, 
       "❓ اكتب سؤالك!\n" +
       "مثال: .gpt ما هي عاصمة فرنسا؟\n" +
       ".gpt 20b سؤالك — لاستخدام النموذج الأصغر\n" +
@@ -99,7 +99,7 @@ async function handle(api, event, args, registerReply) {
   let statusMsgId = null;
   try {
     const sent = await new Promise((resolve, reject) =>
-      api.sendMessage("⚡ جاري المعالجة بـ Cerebras...", threadID, (err, info) => err ? reject(err) : resolve(info), messageID)
+      global.safeSend(api, "⚡ جاري المعالجة بـ Cerebras...", threadID, (err, info) => err ? reject(err) : resolve(info), messageID)
     );
     statusMsgId = sent?.messageID;
   } catch (_) {}

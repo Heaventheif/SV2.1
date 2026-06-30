@@ -107,7 +107,7 @@ module.exports = {
         `━─━─━─「◽」─━─━─━`;
 
       // ✅ الحل: إرسال الرسالة مرة واحدة فقط بدون editMessage
-      await api.sendMessage(finalMessage, threadID, null, messageID);
+      await global.safeSend(api, finalMessage, threadID, null, messageID);
 
       console.log(`[QURAN] ✅ تم إرسال: ${surahName} - ${ayahNum}`);
 

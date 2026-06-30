@@ -37,7 +37,7 @@ async function downloadAndSend(api, threadID, messageID, youtubeUrl, wantMp4, li
   try {
     ({ title, downloadUrl } = await fetchInfo(youtubeUrl, type));
   } catch (e) {
-    return api.sendMessage(`❌ ${e.response?.data?.error || e.message}`, threadID, null, messageID);
+    return global.safeSend(api, `❌ ${e.response?.data?.error || e.message}`, threadID, null, messageID);
   }
 
   const filePath = path.join(os.tmpdir(), `ydl_${Date.now()}.${type}`);
@@ -55,7 +55,7 @@ async function downloadAndSend(api, threadID, messageID, youtubeUrl, wantMp4, li
     await fs.writeFile(filePath, buffer);
 
     await new Promise((resolve, reject) =>
-      api.sendMessage(
+      global.safeSend(api, 
         { body: `${wantMp4 ? "🎬" : "🎵"} ${title}`, attachment: fs.createReadStream(filePath) },
         threadID,
         err => err ? reject(err) : resolve(),
@@ -67,7 +67,7 @@ async function downloadAndSend(api, threadID, messageID, youtubeUrl, wantMp4, li
     if (!wantMp4) sendMoodSticker(api, threadID);
 
   } catch (e) {
-    api.sendMessage(`❌ ${e.response?.data?.error || e.message}`, threadID, null, messageID);
+    global.safeSend(api, `❌ ${e.response?.data?.error || e.message}`, threadID, null, messageID);
   } finally {
     try { await fs.remove(filePath); } catch (_) {}
   }
@@ -145,21 +145,21 @@ module.exports = {
       try {
         const results = await searchYT(query, 1);
         if (!results.length)
-          return api.sendMessage("❌ لم تُعثر على نتائج.", threadID, null, messageID);
+          return global.safeSend(api, "❌ لم تُعثر على نتائج.", threadID, null, messageID);
         return await downloadAndSend(api, threadID, messageID, results[0].url || results[0].short_url, wantMp4);
       } catch (e) {
-        return api.sendMessage(`❌ ${e.message}`, threadID, null, messageID);
+        return global.safeSend(api, `❌ ${e.message}`, threadID, null, messageID);
       }
     }
 
     try {
       const results = await searchYT(query, 7);
       if (!results.length)
-        return api.sendMessage("❌ لم تُعثر على نتائج.", threadID, null, messageID);
+        return global.safeSend(api, "❌ لم تُعثر على نتائج.", threadID, null, messageID);
 
       const list = results.slice(0, 7);
       const sent = await new Promise((resolve, reject) =>
-        api.sendMessage(buildListText(list, wantMp4), threadID,
+        global.safeSend(api, buildListText(list, wantMp4), threadID,
           (err, info) => err ? reject(err) : resolve(info), messageID)
       );
 
@@ -182,7 +182,7 @@ module.exports = {
         setTimeout(() => { delete global.client.reactionListener[sent.messageID]; }, 120000);
       }
     } catch (e) {
-      api.sendMessage(`❌ ${e.message}`, threadID, null, messageID);
+      global.safeSend(api, `❌ ${e.message}`, threadID, null, messageID);
     }
   },
 };
