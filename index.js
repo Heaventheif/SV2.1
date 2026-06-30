@@ -58,13 +58,26 @@ global.eventCommands    = [];
 global.appState         = {};
 global.botApi           = null;
 
-// ─── إرسال مباشر فوري (بلا طابور، بلا تأخير، بلا حدود) ───────
-// global.safeSend هنا مجرد اسم متوافق مع باقي الكود — لا يضيف أي
-// تأخير أو طابور، يرسل فوراً عبر api.sendMessage مباشرة.
-global.safeSend = (api, body, threadID, callback, messageID) => {
-  if (messageID !== undefined) return api.sendMessage(body, threadID, callback, messageID);
-  return api.sendMessage(body, threadID, callback);
-};
+// ─── إرسال مباشر مع فاصل زمني بسيط جداً (بلا طابور معقّد، بلا حدود) ──
+// فيسبوك نفسه قد يتجاهل الرسائل بصمت إن أُرسلت متتالية بسرعة كبيرة
+// جداً (0 فاصل). هذا فاصل أدنى صغير فقط بين كل رسالتين متتاليتين —
+// لا يحجب أو يحدّ عدد الرسائل، فقط يباعد بينها زمنياً قليلاً.
+const MIN_SEND_GAP_MS = 350;
+let _lastSendAt = 0;
+let _sendGate = Promise.resolve(); // يضمن التسلسل دون استخدام طابور/مصفوفة
+
+function gatedSend(api, body, threadID, callback, messageID) {
+  _sendGate = _sendGate.then(async () => {
+    const wait = MIN_SEND_GAP_MS - (Date.now() - _lastSendAt);
+    if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    _lastSendAt = Date.now();
+    if (messageID !== undefined) api.sendMessage(body, threadID, callback, messageID);
+    else api.sendMessage(body, threadID, callback);
+  }).catch(e => console.error("[SEND] خطأ:", e.message));
+  return _sendGate;
+}
+
+global.safeSend = gatedSend;
 
 // لا تغليف على api — يُستخدم كما هو دون أي اعتراض على sendMessage
 function wrapApiForSafety(api) { return api; }
