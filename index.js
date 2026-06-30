@@ -27,7 +27,26 @@ process.on("unhandledRejection", (reason) => {
 });
 
 // ─── Globals ─────────────────────────────────────────────────
-global.client           = { reactionListener: {} };
+// reactionListener: نستخدم Proxy ليسجّل تلقائياً وقت كل إدخال (timestamp)
+// دون الحاجة لتعديل كل ملف أمر يضيف مستمع تفاعل — هذا يتيح تنظيفه
+// دورياً في حال نسي أحد الملفات حذف الإدخال بنفسه عند خطأ غير متوقع.
+const _reactionTimestamps = new Map();
+const _reactionListenerRaw = {};
+const reactionListenerProxy = new Proxy(_reactionListenerRaw, {
+  set(target, prop, value) {
+    _reactionTimestamps.set(prop, Date.now());
+    target[prop] = value;
+    return true;
+  },
+  deleteProperty(target, prop) {
+    _reactionTimestamps.delete(prop);
+    delete target[prop];
+    return true;
+  }
+});
+global.client           = { reactionListener: reactionListenerProxy };
+global._reactionTimestamps = _reactionTimestamps;
+
 global.Kagenou          = { replies: {} };
 global.config           = { admins: [], moderators: [], developers: [], vips: [], Prefix: ["."], botName: "Sunken Bot" };
 global.globalData       = new Map();
@@ -39,18 +58,21 @@ global.eventCommands    = [];
 global.appState         = {};
 global.botApi           = null;
 
-// ─── Send Queue (تسلسلي + تأخير لحماية الحساب) ──────────────
+// ─── Send Queue (تسلسلي لكل ثريد + تأخير لحماية الحساب) ─────
 // المعالجة تبقى بالتوازي — فقط لحظة الإرسال الفعلي تمر عبر هذا الـ queue
+// ⚠️ الطابور أصبح لكل threadID على حدة بدل طابور عام واحد:
+//    هكذا لا يتأخر رد مجموعة بسبب ازدحام مجموعة أخرى، بينما تبقى
+//    الرسائل داخل نفس المجموعة متسلسلة بفاصل ثابت لحماية الحساب.
 (() => {
-  const SEND_DELAY_MS = 1000; // تأخير ثانية واحدة بين كل رسالة
-  let _queue   = [];
-  let _running = false;
+  const SEND_DELAY_MS = 1000; // تأخير ثانية واحدة بين كل رسالتين بنفس الثريد
+  const _queues = new Map(); // threadID -> { items: [], running: bool }
 
-  async function _runQueue() {
-    if (_running) return;
-    _running = true;
-    while (_queue.length > 0) {
-      const { api, body, threadID, callback, messageID } = _queue.shift();
+  async function _runQueue(threadID) {
+    const q = _queues.get(threadID);
+    if (!q || q.running) return;
+    q.running = true;
+    while (q.items.length > 0) {
+      const { api, body, callback, messageID } = q.items.shift();
       try {
         await new Promise((resolve) => {
           if (messageID !== undefined) {
@@ -68,24 +90,53 @@ global.botApi           = null;
       } catch (e) {
         console.error("[SEND_QUEUE] خطأ أثناء الإرسال:", e.message);
       }
-      // تأخير بين الرسائل لحماية الحساب
-      if (_queue.length > 0) {
+      if (q.items.length > 0) {
         await new Promise(r => setTimeout(r, SEND_DELAY_MS));
       }
     }
-    _running = false;
+    q.running = false;
+    // إزالة الطابور الفارغ لتفادي تراكم مفاتيح Map بلا داعٍ
+    if (q.items.length === 0) _queues.delete(threadID);
   }
 
   /**
    * global.safeSend(api, body, threadID, callback?, messageID?)
-   * نفس توقيع api.sendMessage تماماً — تُضاف للـ queue وتُرسَل بالتسلسل
+   * نفس توقيع api.sendMessage تماماً — تُضاف لطابور خاص بالـ threadID وتُرسَل بالتسلسل
    * بينما المعالجة (fetchHTML, translateBatch, إلخ) تبقى بالتوازي كما هي
    */
   global.safeSend = (api, body, threadID, callback, messageID) => {
-    _queue.push({ api, body, threadID, callback, messageID });
-    _runQueue();
+    if (!_queues.has(threadID)) _queues.set(threadID, { items: [], running: false });
+    _queues.get(threadID).items.push({ api, body, callback, messageID });
+    _runQueue(threadID);
+  };
+
+  // يفيد في عرض حالة الطوابير ضمن /health عند الحاجة
+  global.getSendQueueStats = () => {
+    let pending = 0;
+    for (const q of _queues.values()) pending += q.items.length;
+    return { activeThreads: _queues.size, pendingMessages: pending };
   };
 })();
+
+// ─── تغليف api.sendMessage تلقائياً ──────────────────────────
+// بعض ملفات commands تستدعي api.sendMessage مباشرة بدل safeSend،
+// فيتجاوز ذلك حماية التأخير بين الرسائل. الحل: ننشئ نسخة "آمنة" من
+// api تُمرَّر للأوامر، تُحوِّل أي api.sendMessage تلقائياً إلى safeSend
+// دون الحاجة لتعديل كل ملف أمر يدوياً.
+function wrapApiForSafety(api) {
+  if (!api || api.__safeWrapped) return api;
+  const safeApi = Object.create(api);
+  safeApi.__safeWrapped = true;
+  safeApi.sendMessage = function (body, threadID, callback, messageID) {
+    global.safeSend(api, body, threadID, callback, messageID);
+    // إرجاع Promise متوافق مع الأنماط التي تستخدم await api.sendMessage(...)
+    return new Promise((resolve) => {
+      global.safeSend(api, body, threadID, (err, info) => resolve(info || {}), messageID);
+    });
+  };
+  return safeApi;
+}
+global.wrapApiForSafety = wrapApiForSafety;
 
 const fs       = require("fs-extra");
 const path     = require("path");
@@ -94,6 +145,22 @@ const chalk    = require("chalk");
 const express  = require("express");
 
 try { require("dotenv").config(); } catch (_) {}
+
+// ─── تحقق مبكر من متغيرات البيئة الحساسة ─────────────────────
+// لا يوقف البوت (قد يعمل بـ appstate.json فقط دون Email/Password)
+// لكنه يحذّر بوضوح بدل اكتشاف الغياب لاحقاً أثناء محاولة الدخول
+(() => {
+  const hasAppState = fs.existsSync(path.join(__dirname, "appstate.json")) || !!process.env.APPSTATE;
+  const hasEmailPass = !!(process.env.FB_EMAIL && process.env.FB_PASSWORD);
+  if (!hasAppState && !hasEmailPass) {
+    console.warn(chalk.yellow(
+      "[ENV] ⚠️ لا يوجد appstate.json ولا FB_EMAIL/FB_PASSWORD في البيئة — راجع .env.example"
+    ));
+  }
+  if (!process.env.MONGO_URI) {
+    console.warn(chalk.yellow("[ENV] ⚠️ MONGO_URI غير مضبوط — بيانات المستخدمين لن تُحفظ بشكل دائم"));
+  }
+})();
 
 // ─── Logger ──────────────────────────────────────────────────
 global.log = {
@@ -185,11 +252,34 @@ try {
   }
 } catch { }
 
+// ─── Rate limiting عام لكل مستخدم (بالإضافة لـ cooldown لكل أمر) ──
+// يمنع تبديل سريع بين عدة أوامر مختلفة لإغراق طابور الإرسال
+const RATE_WINDOW_MS = 10 * 1000; // نافذة 10 ثوانٍ
+const RATE_MAX_CMDS  = 5;         // أقصى 5 أوامر لكل مستخدم كل 10 ثوانٍ
+global.userRateLog = new Map(); // uid -> [timestamps]
+
+function isRateLimited(uid) {
+  const now = Date.now();
+  let arr = global.userRateLog.get(uid) || [];
+  arr = arr.filter(t => now - t < RATE_WINDOW_MS);
+  if (arr.length >= RATE_MAX_CMDS) {
+    global.userRateLog.set(uid, arr);
+    return true;
+  }
+  arr.push(now);
+  global.userRateLog.set(uid, arr);
+  return false;
+}
+
 // ─── Message Handler ─────────────────────────────────────────
-const handleMessage = async (api, event) => {
+const handleMessage = async (rawApi, event) => {
   const { threadID, senderID, body, messageReply, messageID } = event;
   const hasAttachment = (event.attachments?.length > 0);
   if (!body?.trim() && !hasAttachment) return;
+
+  // نسخة "آمنة" من api: أي api.sendMessage داخل الأوامر يمر تلقائياً
+  // عبر طابور safeSend الخاص بالـ threadID (حماية الحساب من السبام)
+  const api = global.wrapApiForSafety(rawApi);
 
   const messageText = body.trim();
 
@@ -243,6 +333,12 @@ const handleMessage = async (api, event) => {
   const reqRole = command.config?.role ?? 0;
   if (role < reqRole) {
     global.safeSend(api, "⚠️ هذا الأمر للمشرفين فقط", threadID, null, messageID);
+    return;
+  }
+
+  // ─── Rate limit عام (قبل أي معالجة أخرى) ──────────────────
+  if (isRateLimited(senderID)) {
+    global.safeSend(api, "⚠️ أوامر كثيرة جداً بسرعة — انتظر قليلاً", threadID, null, messageID);
     return;
   }
 
@@ -311,7 +407,8 @@ const handleReaction = (api, event) => {
 };
 
 // ─── Event Handler ────────────────────────────────────────────
-const handleEvent = async (api, event) => {
+const handleEvent = async (rawApi, event) => {
+  const api = global.wrapApiForSafety(rawApi);
   // ━━━ إصلاح السبب الأول للتنفيذ المزدوج ━━━━━━━━━━━━━━━━━━━━
   // إذا كانت الرسالة تبدأ بكلمة تُطابق أمراً معروفاً في global.commands،
   // فسيُعالجه handleMessage عبر onStart — نتجنب استدعاء onChat لنفس الأمر
@@ -356,10 +453,13 @@ const startListening = (api) => {
       attempts = 0;
       try {
         if (["message","message_reply","log","event"].includes(event.type)) {
-          await handleEvent(api, event);
-          await handleMessage(api, event);
+          // كلتا الدالتين fire-and-forget داخلياً (لا تنتظران تنفيذ
+          // الأمر فعلياً) — استدعاء بدون await يمنع أي تأخير تتابعي
+          // غير ضروري بين الأحداث الواردة من المستمع نفسه
+          handleEvent(api, event).catch(e => console.error("[EVENT ERR]", e.message));
+          handleMessage(api, event).catch(e => console.error("[EVENT ERR]", e.message));
         } else if (event.type === "message_reaction") {
-          await handleReaction(api, event);
+          handleReaction(api, event);
         }
       } catch (e) { console.error("[EVENT ERR]", e.message); }
     });
@@ -400,6 +500,7 @@ function startWebServer() {
       commands:  global.commands.size,
       uptime:    Math.floor(process.uptime()),
       memory:    `${Math.round(process.memoryUsage().rss / 1024 / 1024)} MB`,
+      sendQueue: global.getSendQueueStats ? global.getSendQueueStats() : null,
       timestamp: new Date().toISOString(),
     });
   }
@@ -443,6 +544,12 @@ function startWebServer() {
         const limit = Math.min(parseInt(req.body?.limit || 10), 15);
         if (!query) return res.status(400).json({ error: "query مطلوب" });
 
+        // ── كاش 5 دقائق لنفس الاستعلام (يقلل زمن الاستجابة ويوفر حصص الـ API) ──
+        const cache    = require("./utils/cache");
+        const cacheKey = `yt_search:${query.toLowerCase()}:${limit}`;
+        const cached   = cache.get(cacheKey);
+        if (cached) return res.json({ results: cached, cached: true });
+
         const data = await search(query);
         if (!data.status || !data.results?.length)
           return res.status(404).json({ error: data.message || "لا توجد نتائج" });
@@ -455,6 +562,7 @@ function startWebServer() {
           uploader: v.author?.name || v.channel || "",
           thumb:    v.thumbnail || v.image || "",
         }));
+        cache.set(cacheKey, results, 5 * 60 * 1000);
         res.json({ results });
       } catch (e) {
         console.error("[YT/search]", e.message);
@@ -565,7 +673,17 @@ function startWebServer() {
 }
 
 // ─── DB ──────────────────────────────────────────────────────
-const { connectDB } = require("./db/index");
+const { connectDB, flushAllAndDisconnect } = require("./db/index");
+
+// إغلاق سليم: يحفظ آخر تغييرات usersData/globalData قبل إيقاف العملية
+// (مثلاً عند إعادة نشر على Render أو إيقاف يدوي)
+["SIGTERM", "SIGINT"].forEach(sig => {
+  process.on(sig, async () => {
+    console.log(chalk.yellow(`[SHUTDOWN] إشارة ${sig} — جاري حفظ البيانات قبل الإغلاق...`));
+    try { await flushAllAndDisconnect(); } catch (_) {}
+    process.exit(0);
+  });
+});
 
 // ════════════════════════════════════════════════════════════
 //  🔐 توليد رمز 2FA تلقائياً (TOTP)
@@ -586,6 +704,39 @@ function generate2FACode(secret) {
     return null;
   }
 }
+
+// ════════════════════════════════════════════════════════════
+//  🗑️  تنظيف الملفات المؤقتة اليتيمة (orphaned temp files)
+//  بعض ملفات commands تحمّل ملفات مؤقتة في os.tmpdir() وتحذفها بعد
+//  الإرسال، لكن عند تعطل غير متوقع (انقطاع الاتصال، استثناء قبل
+//  إنشاء الـ stream) قد يبقى الملف على القرص. هذه الدالة تمسح أي
+//  ملفات بادئتها معروفة وعمرها أكبر من ساعة، وتُستدعى عند الإقلاع
+//  وضمن دورة التنظيف الدورية.
+// ════════════════════════════════════════════════════════════
+const BOT_TMP_PREFIXES = ["fb_", "pin_", "tumblr_", "sc_", "sing_", "tts_", "ydl_", "yt_", "yt2_", "yt_a_", "yt_v_"];
+function cleanupOrphanTempFiles() {
+  try {
+    const os = require("os");
+    const dir = os.tmpdir();
+    const now = Date.now();
+    let removed = 0;
+    for (const name of fs.readdirSync(dir)) {
+      if (!BOT_TMP_PREFIXES.some(p => name.startsWith(p))) continue;
+      const fp = path.join(dir, name);
+      try {
+        const stat = fs.statSync(fp);
+        if (now - stat.mtimeMs > 60 * 60 * 1000) { // أقدم من ساعة
+          fs.removeSync(fp);
+          removed++;
+        }
+      } catch (_) {}
+    }
+    if (removed) console.log(chalk.cyan(`[CLEANUP] 🗑️ حُذف ${removed} ملف مؤقت يتيم`));
+  } catch (e) {
+    console.warn(chalk.yellow("[CLEANUP] ⚠️ فشل تنظيف الملفات المؤقتة:", e.message));
+  }
+}
+global.cleanupOrphanTempFiles = cleanupOrphanTempFiles;
 
 // ════════════════════════════════════════════════════════════
 //  💾 حفظ AppState على القرص فوراً
@@ -687,6 +838,22 @@ function onLoginSuccess(api) {
         global.usersData.delete(uid); cleaned++;
       }
     }
+    // تنظيف reactionListener المتروك (لم يُحذف يدوياً خلال 10 دقائق)
+    for (const [msgID, ts] of global._reactionTimestamps.entries()) {
+      if (now - ts > 10 * 60 * 1000) {
+        delete global.client.reactionListener[msgID]; cleaned++;
+      }
+    }
+    // تنظيف سجل rate limit القديم
+    for (const [uid, arr] of global.userRateLog.entries()) {
+      const fresh = arr.filter(t => now - t < RATE_WINDOW_MS);
+      if (fresh.length === 0) global.userRateLog.delete(uid);
+      else global.userRateLog.set(uid, fresh);
+    }
+    // تنظيف الملفات المؤقتة اليتيمة في os.tmpdir()
+    cleanupOrphanTempFiles();
+    // تنظيف الكاش المشترك (utils/cache.js) من المدخلات المنتهية
+    try { require("./utils/cache").sweep(); } catch (_) {}
 
     const mem = process.memoryUsage();
     console.log(chalk.cyan(
@@ -701,6 +868,9 @@ function onLoginSuccess(api) {
 const startBot = async () => {
   // ① أول شيء: افتح المنفذ — Render يرفض العملية إذا لم يجد port خلال دقائق
   startWebServer();
+
+  // 🗑️ نظّف أي ملفات مؤقتة متبقية من تشغيل سابق تعطّل فجأة
+  cleanupOrphanTempFiles();
 
   // ✅ اتصال MongoDB — connectDB() تضبط global.db بنفسها
   // (تُعيدها mongoose عند النجاح، أو null عند الفشل/عدم وجود MONGO_URI)
