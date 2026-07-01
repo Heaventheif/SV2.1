@@ -279,9 +279,6 @@ const handleMessage = async (rawApi, event) => {
   global.setCooldown(senderID, commandName, cd);
 
   // ─── Execute (بالخلفية — لا await هنا لحماية التوازي) ────
-  // ⏳ تفاعل فوري يُعلم المستخدم أن البوت استلم الطلب
-  try { api.setMessageReaction("⏳", messageID, threadID, () => {}, true); } catch (_) {}
-
   // الـ promise تعمل بالخلفية — handleMessage يعود فوراً لاستقبال الطلب التالي
   (async () => {
     try {
@@ -310,12 +307,8 @@ const handleMessage = async (rawApi, event) => {
       if      (command.onStart) await command.onStart(ctx);
       else if (command.run)     await command.run(ctx);
       else if (command.execute) await command.execute(api, event, args, global.commands, "", global.config.admins, global.appState, t => global.safeSend(api, t, threadID, null, messageID), global.usersData, global.globalData);
-      // ✅ تفاعل نجاح بعد انتهاء الأمر
-      try { api.setMessageReaction("✅", messageID, threadID, () => {}, true); } catch (_) {}
     } catch (err) {
       console.error(`[CMD ERR] ${commandName}:`, err.message);
-      // ❌ تفاعل فشل
-      try { api.setMessageReaction("❌", messageID, threadID, () => {}, true); } catch (_) {}
       global.safeSend(api, `❌ خطأ: ${err.message?.substring(0, 100)}`, threadID, null, messageID);
     }
   })();
