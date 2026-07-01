@@ -140,72 +140,82 @@ function pickBestManga(query, candidates) {
   return { manga: best, score: bestScore };
 }
 
-// ─── المرحلة السابعة/الثامنة: جلب الفصول واختيار الفصل المطلوب ───
+// ─── المرحلة السابعة/الثامنة: البحث المباشر عن الفصل عبر /chapter ───
+//
+// لم نعد نعتمد على /manga/{id}/aggregate إطلاقًا لاختيار نسخة اللغة، لأن
+// aggregate يجمّع الفصول بطريقة قد لا تُدرج كل اللغات ضمن id/others لنفس
+// رقم الفصل (وهذا كان سبب اختيار الإسبانية رغم توفر العربية). البديل هنا:
+// استعلام مباشر لـ /chapter بفلاتر manga + chapter + translatedLanguage،
+// ثم فلترة/ترتيب النتائج يدويًا لاختيار أدق نسخة.
 
-async function fetchAggregate(mangaId, lang) {
-  const cacheKey = `manga_aggregate:${mangaId}:${lang || "all"}`;
+const CHAPTER_FETCH_LIMIT = 100; // نجلب كل النسخ المتاحة بنفس الرقم/اللغة دفعة واحدة بدل limit=1
+const CHAPTER_QUERY_TTL   = 5 * 60 * 1000; // كاش قصير لاستعلامات الفصل (5 دقائق)
+
+// يبني صيغ محتملة لرقم الفصل كما قد يُخزَّن في MangaDex:
+// "13" يجب أن يقبل أيضًا "13.0"، والعكس، لكن لا يقبل "130" أو "213".
+// نعتمد على صيغتين فقط (بدون/مع ".0") تغطي الغالبية العظمى من الحالات،
+// وأي مطابقة نهائية تُتحقق عدديًا لاحقًا في isExactChapterMatch() كحارس أمان إضافي.
+function buildChapterCandidates(chapterNumberStr) {
+  const raw = String(chapterNumberStr).trim();
+  const candidates = new Set([raw]);
+
+  if (!raw.includes(".")) {
+    candidates.add(`${raw}.0`);
+  } else if (raw.endsWith(".0")) {
+    candidates.add(raw.slice(0, -2));
+  }
+
+  return [...candidates];
+}
+
+// مطابقة عددية صارمة: 13 يساوي 13.0 لكنه لا يساوي 130 أو 213.
+// هذا يحل محل أي استخدام لـ includes()/parseFloat() التقريبي في المنطق القديم.
+function isExactChapterMatch(attrChapter, targetNum) {
+  if (attrChapter === null || attrChapter === undefined) return false;
+  const n = Number(attrChapter);
+  return !Number.isNaN(n) && n === targetNum;
+}
+
+// يستبعد النتائج غير الصالحة للقراءة داخل البوت:
+// - فصول خارجية (externalUrl): لا تحتوي صفحات قابلة للتحميل من MangaDex.
+// - فصول بلا صفحات (pages === 0): غالبًا محذوفة أو منسوخة جزئيًا.
+function isReadableChapter(attrs) {
+  if (!attrs) return false;
+  if (attrs.externalUrl) return false;
+  if (typeof attrs.pages === "number" && attrs.pages <= 0) return false;
+  return true;
+}
+
+// من بين نتائج /chapter الخام لنفس رقم/لغة الفصل، يختار الأنسب:
+// تطابق عددي دقيق + قابل للقراءة + الأحدث (readableAt) عند تعدد الترجمات.
+function pickBestChapterResult(rawResults, targetNum) {
+  const valid = (rawResults || []).filter(
+    (item) => item?.attributes && isExactChapterMatch(item.attributes.chapter, targetNum) && isReadableChapter(item.attributes)
+  );
+  if (!valid.length) return null;
+
+  valid.sort((a, b) => {
+    const da = new Date(a.attributes.readableAt || a.attributes.publishAt || 0).getTime();
+    const db = new Date(b.attributes.readableAt || b.attributes.publishAt || 0).getTime();
+    return db - da; // الأحدث أولاً
+  });
+
+  const best = valid[0];
+  return { id: best.id, lang: best.attributes.translatedLanguage };
+}
+
+// استعلام خام واحد إلى /chapter بفلتر رقم فصل معيّن (+لغة اختيارية)
+async function queryChaptersRaw(mangaId, chapterFilter, lang) {
+  const cacheKey = `manga_chapter_query:${mangaId}:${chapterFilter}:${lang || "any"}`;
   const cached = cache.get(cacheKey);
   if (cached) return cached;
 
-  const params = {};
-  if (lang) params["translatedLanguage[]"] = [lang];
-
-  const res = await axios.get(`${API_BASE}/manga/${mangaId}/aggregate`, {
-    params,
-    headers: HEADERS,
-    timeout: 15000,
-  });
-
-  const volumes = res.data?.volumes || {};
-  cache.set(cacheKey, volumes, AGGREGATE_TTL);
-  return volumes;
-}
-
-// يبحث في مخطط aggregate عن مدخل الفصل بأولوية: 13 → 13.0 → 13.x → أخرى
-function findChapterEntry(volumes, chapterNumber) {
-  const entries = [];
-  for (const vol of Object.values(volumes)) {
-    for (const ch of Object.values(vol.chapters || {})) entries.push(ch);
-  }
-  if (!entries.length) return null;
-
-  const target = String(chapterNumber);
-  const targetNum = Number(chapterNumber);
-
-  // 1) تطابق تام للنص
-  let found = entries.find((e) => e.chapter === target);
-  if (found) return found;
-
-  // 2) صيغة "13.0"
-  found = entries.find((e) => Number(e.chapter) === targetNum && e.chapter.includes("."));
-  if (found) return found;
-
-  // 3) فصول فرعية مثل "13.5"، "13.1" (أقرب رقم للفصل المطلوب)
-  const decimals = entries
-    .filter((e) => {
-      const n = parseFloat(e.chapter);
-      return !isNaN(n) && Math.floor(n) === targetNum && n !== targetNum;
-    })
-    .sort((a, b) => parseFloat(a.chapter) - parseFloat(b.chapter));
-  if (decimals.length) return decimals[0];
-
-  // 4) أي مطابقة نصية تحتوي الرقم (مثل فصول خاصة/Extra)
-  found = entries.find((e) => e.chapter && e.chapter.includes(target));
-  if (found) return found;
-
-  return null;
-}
-
-// يستعلم مباشرة عن endpoint /chapter بفلاتر manga + chapter + لغة محددة
-// هذا أدق من الاعتماد على aggregate's "others"، لأن aggregate قد لا يضمن
-// وجود كل اللغات ضمن id/others لنفس رقم الفصل.
-async function findChapterIdByLanguage(mangaId, chapterStr, lang) {
   const params = {
     manga: mangaId,
-    chapter: chapterStr,
-    "contentRating[]": ["safe", "suggestive", "erotica", "pornographic"],
-    limit: 1,
+    chapter: chapterFilter,
+    limit: CHAPTER_FETCH_LIMIT,
     "order[readableAt]": "desc",
+    "contentRating[]": ["safe", "suggestive", "erotica", "pornographic"],
   };
   if (lang) params["translatedLanguage[]"] = [lang];
 
@@ -215,41 +225,129 @@ async function findChapterIdByLanguage(mangaId, chapterStr, lang) {
     timeout: 15000,
   });
 
-  const data = res.data?.data || [];
-  if (!data.length) return null;
-  return { id: data[0].id, lang: data[0].attributes?.translatedLanguage };
+  const data = Array.isArray(res.data?.data) ? res.data.data : [];
+  cache.set(cacheKey, data, CHAPTER_QUERY_TTL);
+  return data;
 }
 
-// يختار أفضل نسخة لغة لنفس رقم الفصل، عبر استعلام مباشر لكل لغة بالأولوية
-// (بدل الاعتماد على others من aggregate)
-async function resolveLanguageVariant(chapterStr, mangaId, requestedLang) {
+// يجرّب كل صيغ رقم الفصل المحتملة (13 / 13.0) للغة واحدة، ويدمج النتائج
+// قبل اختيار الأفضل. هذا يغطي طلب "لا تستخدم limit=1، اجمع النتائج ثم اختر".
+async function findBestChapterForLanguage(mangaId, chapterCandidates, lang, targetNum) {
+  const combined = [];
+  for (const candidate of chapterCandidates) {
+    try {
+      const results = await queryChaptersRaw(mangaId, candidate, lang);
+      if (results.length) combined.push(...results);
+    } catch (_) {
+      /* تجاهل فشل صيغة واحدة، جرّب الصيغة التالية */
+    }
+  }
+  return pickBestChapterResult(combined, targetNum);
+}
+
+// الملاذ الأخير عند عدم توفر رقم الفصل بأي من الصيغ ولا بأي لغة من الأولوية:
+// نجلب أقرب فصل رقميًا (فرق مطلق أصغر) من نفس المانجا، مهما كانت لغته،
+// حتى لا يفشل الأمر كليًا إن كان الفصل مرقّمًا بصيغة غير متوقعة (مثل "13-omake").
+// يُستخدم فقط إذا لم توجد أي نتيجة أخرى مطابقة تمامًا (وفق الشرط رقم 7).
+async function findNearestChapterAsLastResort(mangaId, targetNum) {
+  try {
+    const res = await axios.get(`${API_BASE}/chapter`, {
+      params: {
+        manga: mangaId,
+        limit: CHAPTER_FETCH_LIMIT,
+        "order[chapter]": "asc",
+        "contentRating[]": ["safe", "suggestive", "erotica", "pornographic"],
+      },
+      headers: HEADERS,
+      timeout: 15000,
+    });
+
+    const data = Array.isArray(res.data?.data) ? res.data.data : [];
+    const readable = data.filter((item) => isReadableChapter(item?.attributes));
+    if (!readable.length) return null;
+
+    let nearest = null;
+    let nearestDiff = Infinity;
+    for (const item of readable) {
+      const n = Number(item.attributes.chapter);
+      if (Number.isNaN(n)) continue;
+      const diff = Math.abs(n - targetNum);
+      if (diff < nearestDiff) {
+        nearestDiff = diff;
+        nearest = item;
+      }
+    }
+    if (!nearest) return null;
+    return { id: nearest.id, lang: nearest.attributes.translatedLanguage };
+  } catch (_) {
+    return null;
+  }
+}
+
+// نقطة الدخول الرئيسية لاختيار الفصل واللغة الصحيحين.
+// الترتيب: لغة محددة من المستخدم → (بدون تحديد) عربي ثم إنجليزي ثم ياباني
+// → أي لغة متوفرة لنفس الرقم تمامًا → ملاذ أخير بأقرب رقم فصل (نادر الحدوث).
+async function resolveChapter(mangaId, chapterNumberStr, requestedLang) {
+  const targetNum = Number(chapterNumberStr);
+  const chapterCandidates = buildChapterCandidates(chapterNumberStr);
   const langsToTry = requestedLang ? [requestedLang] : LANG_PRIORITY;
 
+  let selected = null;
   for (const lang of langsToTry) {
-    try {
-      const found = await findChapterIdByLanguage(mangaId, chapterStr, lang);
-      if (found) return { chapterId: found.id, lang: found.lang, availableLangs: [found.lang] };
-    } catch (_) {
-      /* جرّب اللغة التالية */
-    }
+    selected = await findBestChapterForLanguage(mangaId, chapterCandidates, lang, targetNum);
+    if (selected) break;
   }
 
+  // وضع تلقائي (بدون طلب لغة معيّنة) ولم نجد عربي/إنجليزي/ياباني:
+  // جرّب أي لغة أخرى بنفس رقم الفصل تمامًا قبل اللجوء للملاذ الأخير.
+  if (!selected && !requestedLang) {
+    selected = await findBestChapterForLanguage(mangaId, chapterCandidates, null, targetNum);
+  }
+
+  if (selected) {
+    const usedArabicFallback = !requestedLang && selected.lang !== "ar";
+    const result = { chapterId: selected.id, lang: selected.lang, availableLangs: [selected.lang], usedArabicFallback };
+    console.log({
+      mangaId,
+      chapter: chapterNumberStr,
+      requestedLanguage: requestedLang || null,
+      selectedLanguage: selected.lang,
+      chapterId: selected.id,
+    });
+    return result;
+  }
+
+  // لغة محددة من المستخدم ولم توجد: أبلغه بأي لغة بديلة متوفرة لنفس الرقم (إن وجدت)
   if (requestedLang) {
-    // اللغة المطلوبة غير متوفرة — نجلب أي نسخة متاحة لهذا الفصل فقط لإخبار
-    // المستخدم بلغة بديلة موجودة (بدون استعراض كل اللغات، استعلام واحد يكفي)
-    try {
-      const fallback = await findChapterIdByLanguage(mangaId, chapterStr, null);
-      return { chapterId: null, availableLangs: fallback ? [fallback.lang] : [] };
-    } catch (_) {
-      return { chapterId: null, availableLangs: [] };
-    }
+    const anyLang = await findBestChapterForLanguage(mangaId, chapterCandidates, null, targetNum);
+    console.log({
+      mangaId,
+      chapter: chapterNumberStr,
+      requestedLanguage: requestedLang,
+      selectedLanguage: null,
+      chapterId: null,
+    });
+    return { chapterId: null, availableLangs: anyLang ? [anyLang.lang] : [] };
   }
 
-  // لا شيء من أولوية اللغات متوفر — جرّب أي لغة متاحة كخيار أخير
-  try {
-    const found = await findChapterIdByLanguage(mangaId, chapterStr, null);
-    if (found) return { chapterId: found.id, lang: found.lang, availableLangs: [found.lang] };
-  } catch (_) {}
+  // ملاذ أخير: لا توجد أي نسخة مطابقة تمامًا لرقم الفصل بأي لغة — جرّب أقرب رقم
+  const fallback = await findNearestChapterAsLastResort(mangaId, targetNum);
+  console.log({
+    mangaId,
+    chapter: chapterNumberStr,
+    requestedLanguage: requestedLang || null,
+    selectedLanguage: fallback?.lang || null,
+    chapterId: fallback?.id || null,
+  });
+  if (fallback) {
+    return {
+      chapterId: fallback.id,
+      lang: fallback.lang,
+      availableLangs: [fallback.lang],
+      usedArabicFallback: fallback.lang !== "ar",
+      approximateMatch: true,
+    };
+  }
 
   return { chapterId: null, availableLangs: [] };
 }
