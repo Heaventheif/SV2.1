@@ -196,45 +196,62 @@ function findChapterEntry(volumes, chapterNumber) {
   return null;
 }
 
-// يجلب لغة فصل معيّن عبر معرفه
-async function getChapterLanguage(chapterId) {
-  const res = await axios.get(`${API_BASE}/chapter/${chapterId}`, {
+// يستعلم مباشرة عن endpoint /chapter بفلاتر manga + chapter + لغة محددة
+// هذا أدق من الاعتماد على aggregate's "others"، لأن aggregate قد لا يضمن
+// وجود كل اللغات ضمن id/others لنفس رقم الفصل.
+async function findChapterIdByLanguage(mangaId, chapterStr, lang) {
+  const params = {
+    manga: mangaId,
+    chapter: chapterStr,
+    "contentRating[]": ["safe", "suggestive", "erotica", "pornographic"],
+    limit: 1,
+    "order[readableAt]": "desc",
+  };
+  if (lang) params["translatedLanguage[]"] = [lang];
+
+  const res = await axios.get(`${API_BASE}/chapter`, {
+    params,
     headers: HEADERS,
     timeout: 15000,
   });
-  return res.data?.data?.attributes?.translatedLanguage;
+
+  const data = res.data?.data || [];
+  if (!data.length) return null;
+  return { id: data[0].id, lang: data[0].attributes?.translatedLanguage };
 }
 
-// يختار أفضل نسخة لغة من بين (id الرئيسي + others) حسب الأولوية المطلوبة
-async function resolveLanguageVariant(entry, requestedLang) {
-  const candidateIds = [entry.id, ...(entry.others || [])];
-  const langMap = {}; // lang -> chapterId
+// يختار أفضل نسخة لغة لنفس رقم الفصل، عبر استعلام مباشر لكل لغة بالأولوية
+// (بدل الاعتماد على others من aggregate)
+async function resolveLanguageVariant(chapterStr, mangaId, requestedLang) {
+  const langsToTry = requestedLang ? [requestedLang] : LANG_PRIORITY;
 
-  for (const id of candidateIds) {
+  for (const lang of langsToTry) {
     try {
-      const lang = await getChapterLanguage(id);
-      if (lang && !langMap[lang]) langMap[lang] = id;
+      const found = await findChapterIdByLanguage(mangaId, chapterStr, lang);
+      if (found) return { chapterId: found.id, lang: found.lang, availableLangs: [found.lang] };
     } catch (_) {
-      /* تجاهل معرف فشل جلبه، جرّب التالي */
+      /* جرّب اللغة التالية */
     }
   }
-
-  const availableLangs = Object.keys(langMap);
-  if (!availableLangs.length) return { chapterId: null, availableLangs: [] };
 
   if (requestedLang) {
-    if (langMap[requestedLang]) {
-      return { chapterId: langMap[requestedLang], lang: requestedLang, availableLangs };
+    // اللغة المطلوبة غير متوفرة — نجلب أي نسخة متاحة لهذا الفصل فقط لإخبار
+    // المستخدم بلغة بديلة موجودة (بدون استعراض كل اللغات، استعلام واحد يكفي)
+    try {
+      const fallback = await findChapterIdByLanguage(mangaId, chapterStr, null);
+      return { chapterId: null, availableLangs: fallback ? [fallback.lang] : [] };
+    } catch (_) {
+      return { chapterId: null, availableLangs: [] };
     }
-    return { chapterId: null, availableLangs };
   }
 
-  for (const lang of LANG_PRIORITY) {
-    if (langMap[lang]) return { chapterId: langMap[lang], lang, availableLangs };
-  }
-  // أي لغة متوفرة كخيار أخير
-  const anyLang = availableLangs[0];
-  return { chapterId: langMap[anyLang], lang: anyLang, availableLangs };
+  // لا شيء من أولوية اللغات متوفر — جرّب أي لغة متاحة كخيار أخير
+  try {
+    const found = await findChapterIdByLanguage(mangaId, chapterStr, null);
+    if (found) return { chapterId: found.id, lang: found.lang, availableLangs: [found.lang] };
+  } catch (_) {}
+
+  return { chapterId: null, availableLangs: [] };
 }
 
 // ─── المرحلة الحادية عشر/الثانية عشر: At-Home Server وبناء الروابط ───
@@ -396,7 +413,11 @@ module.exports = {
       }
 
       // ─── المرحلة التاسعة/العاشرة: اختيار اللغة و Chapter ID ───
-      const { chapterId, lang, availableLangs } = await resolveLanguageVariant(entry, requestedLang);
+      const { chapterId, lang, availableLangs } = await resolveLanguageVariant(
+        entry.chapter,
+        mangaId,
+        requestedLang
+      );
 
       if (!chapterId) {
         if (requestedLang && availableLangs.length) {
