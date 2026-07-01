@@ -1,15 +1,20 @@
-// commands/manga.js (أو manga2.js)
+// commands/manga2.js
 const axios = require('axios');
 const cheerio = require('cheerio');
 
+// إعدادات الإرسال — يمكن تعديلها حسب الحاجة
+const BATCH_SIZE = 5;        // عدد الصور كمرفقات في الرسالة الواحدة
+const BATCH_DELAY_MS = 1500; // تأخير بين كل دفعة والتالية (لتفادي ضغط فيسبوك)
+const MAX_IMAGES = 80;       // سقف أمان لعدد الصور المُرسَلة لأي فصل واحد
+
 module.exports = {
   config: {
-    name: "manga2",          // غيّر إلى "manga2" إذا أردت أمراً باسم مختلف
+    name: "manga2",
     aliases: ["مانجا", "m"],
     role: 0,
     countDown: 15,
     category: "وسائط",
-    description: "كشط صور فصل من مانجا العاشق - استخدم .manga <اسم المانجا> <رقم الفصل>"
+    description: "كشط وإرسال صور فصل من مانجا العاشق - استخدم .manga <اسم المانجا> <رقم الفصل>"
   },
 
   onStart: async ({ api, event, args }) => {
@@ -23,28 +28,28 @@ module.exports = {
       );
     }
 
-    // استخراج رقم الفصل (آخر وسيط) واسم المانجا (الباقي)
     const chapterNumber = args[args.length - 1];
     const mangaNameParts = args.slice(0, -1);
-    const rawMangaName = mangaNameParts.join(' '); // للبحث
-    const initialSlug = mangaNameParts.join('-').toLowerCase(); // تخمين أولي
+    const rawMangaName = mangaNameParts.join(' ');
+    const initialSlug = mangaNameParts.join('-').toLowerCase();
 
     const baseUrl = "https://3asq.pro";
     let chapterUrl = `${baseUrl}/manga/${encodeURIComponent(initialSlug)}/${encodeURIComponent(chapterNumber)}/`;
 
+    const commonHeaders = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept-Language': 'ar,en-US;q=0.7,en;q=0.3',
+    };
+
     await api.sendMessage(`🔍 جاري البحث عن الفصل ${chapterNumber} من "${rawMangaName}" ...`, threadID, messageID);
 
     try {
-      // دالة مساعدة لجلب الصور من رابط معين
+      // ---------- 1) كشط روابط الصور ----------
       const fetchImages = async (url) => {
-        const response = await axios.get(url, {
-          timeout: 20000,
-          headers: { 'User-Agent': 'Mozilla/5.0' }
-        });
+        const response = await axios.get(url, { timeout: 20000, headers: commonHeaders });
         if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
         const $ = cheerio.load(response.data);
         let images = [];
-        // محاولة المحددات المختلفة
         const selectors = ['.page-break img', '.reading-content img'];
         for (const selector of selectors) {
           const elements = $(selector);
@@ -53,6 +58,7 @@ module.exports = {
               const img = $(el);
               let src = img.attr('data-src') || img.attr('data-lazy-src') || img.attr('src');
               if (src) {
+                src = src.trim();
                 try { images.push(new URL(src, baseUrl).href); }
                 catch (e) { /* تجاهل */ }
               }
@@ -63,31 +69,21 @@ module.exports = {
         return images;
       };
 
-      // المحاولة الأولى بالـ slug المُخمَّن
       let images = await fetchImages(chapterUrl);
 
-      // إذا لم نجد صوراً، حاول البحث عن الـ slug الصحيح
       if (images.length === 0) {
-        // البحث في الموقع عن المانجا
         const searchUrl = `${baseUrl}/?s=${encodeURIComponent(rawMangaName)}`;
-        const searchRes = await axios.get(searchUrl, {
-          timeout: 10000,
-          headers: { 'User-Agent': 'Mozilla/5.0' }
-        });
+        const searchRes = await axios.get(searchUrl, { timeout: 10000, headers: commonHeaders });
         const $ = cheerio.load(searchRes.data);
-        // استخراج أول رابط مانجا من نتائج البحث
         const firstResult = $('.page-item-detail .item-thumb a').first();
         const href = firstResult.attr('href');
         if (href) {
-          // استخراج الـ slug من الرابط: https://3asq.pro/manga/kingdom-2/
           const slugMatch = href.match(/\/manga\/([^\/]+)\//);
           if (slugMatch) {
             const correctSlug = slugMatch[1];
-            // إعادة بناء الرابط بالـ slug الصحيح
             const correctedUrl = `${baseUrl}/manga/${encodeURIComponent(correctSlug)}/${encodeURIComponent(chapterNumber)}/`;
             await api.sendMessage(`🔄 تم العثور على المانجا باسم "${correctSlug}"، جاري المحاولة ...`, threadID, messageID);
             images = await fetchImages(correctedUrl);
-            // تحديث chapterUrl للاستخدام في الرسالة النهائية
             chapterUrl = correctedUrl;
           }
         }
@@ -101,22 +97,73 @@ module.exports = {
         );
       }
 
-      // عرض النتائج
-      const total = images.length;
-      const previewLimit = 10;
-      let reply = `📖 **مانجا:** ${rawMangaName}\n📄 **الفصل:** ${chapterNumber}\n🖼️ **عدد الصور:** ${total}\n\n`;
-      images.slice(0, previewLimit).forEach((url, i) => {
-        reply += `${i+1}. ${url}\n`;
-      });
-      if (total > previewLimit) reply += `\n... و ${total - previewLimit} صورة أخرى`;
-
-      await api.sendMessage(reply, threadID, messageID);
-      if (images.length > 0) {
-        await api.sendMessage(`🖼️ معاينة الصفحة الأولى:\n${images[0]}`, threadID, messageID);
+      if (images.length > MAX_IMAGES) {
+        images = images.slice(0, MAX_IMAGES);
       }
 
+      await api.sendMessage(
+        `📖 مانجا: ${rawMangaName}\n📄 الفصل: ${chapterNumber}\n🖼️ عدد الصور: ${images.length}\n⏳ جاري تحميل وإرسال الصور...`,
+        threadID,
+        messageID
+      );
+
+      // ---------- 2) تحويل كل رابط صورة إلى Stream قابل للإرفاق ----------
+      // fca-unofficial يقبل stream مباشرة في حقل attachment (لا يقبل روابط نصية).
+      const getImageStream = async (url) => {
+        const res = await axios.get(url, {
+          responseType: 'stream',
+          timeout: 20000,
+          headers: commonHeaders
+        });
+        return res.data;
+      };
+
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      let sentCount = 0;
+      let failedCount = 0;
+
+      // ---------- 3) الإرسال على دفعات ----------
+      for (let i = 0; i < images.length; i += BATCH_SIZE) {
+        const batchUrls = images.slice(i, i + BATCH_SIZE);
+
+        const streams = [];
+        for (const url of batchUrls) {
+          try {
+            const stream = await getImageStream(url);
+            streams.push(stream);
+          } catch (e) {
+            failedCount++;
+            console.error('[manga2] فشل تحميل صورة:', url, e.message);
+          }
+        }
+
+        if (streams.length > 0) {
+          try {
+            await api.sendMessage(
+              { attachment: streams },
+              threadID
+            );
+            sentCount += streams.length;
+          } catch (e) {
+            failedCount += streams.length;
+            console.error('[manga2] فشل إرسال دفعة صور:', e.message);
+          }
+        }
+
+        // تأخير بسيط بين الدفعات لتفادي ضغط فيسبوك (إن لم تكن آخر دفعة)
+        if (i + BATCH_SIZE < images.length) {
+          await sleep(BATCH_DELAY_MS);
+        }
+      }
+
+      // ---------- 4) رسالة ختامية ----------
+      let summary = `✅ تم إرسال ${sentCount} صورة من أصل ${images.length}.`;
+      if (failedCount > 0) summary += `\n⚠️ فشل تحميل/إرسال ${failedCount} صورة (روابط بطيئة أو محظورة مؤقتاً).`;
+      await api.sendMessage(summary, threadID, messageID);
+
     } catch (error) {
-      console.error('[manga] خطأ:', error.message);
+      console.error('[manga2] خطأ:', error.message);
       let errorMsg = `❌ حدث خطأ:\n`;
       if (error.code === 'ECONNABORTED') errorMsg += `انتهت المهلة. حاول مرة أخرى.`;
       else if (error.response) errorMsg += `الخادم رد بـ ${error.response.status}`;
