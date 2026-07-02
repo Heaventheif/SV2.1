@@ -20,11 +20,7 @@ function extractFbUrl(text) {
 }
 
 // ─── تفاعل آمن على الرسالة ────────────────────────────────────
-// نفس صيغة الاستدعاء المستخدمة في index.js (handleMessage):
-// setMessageReaction(emoji, messageID, threadID, callback, forceCustom)
-// موجودة هنا محلياً لأن onChat لا يمر عبر نظام التفاعل المركزي في index.js
-// (ذاك النظام يعمل فقط على الأوامر المستدعاة بالـ Prefix عبر onStart)
-function react() { /* التفاعل مُعطَّل عمداً — البوت يرسل المخرجات النهائية فقط */ }
+// ملاحظة: التفاعل مُعطَّل عمداً — البوت يرسل المخرجات النهائية فقط.
 
 // ─── استدعاء HF ──────────────────────────────────────────────
 async function callHF(fbUrl, quality = "worst") {
@@ -109,11 +105,7 @@ module.exports = {
     if (!fbUrl && event.messageReply?.body) fbUrl = extractFbUrl(event.messageReply.body);
     if (!fbUrl) return;
 
-    const { threadID, messageID } = event;
-
-    react(api, "⏳", messageID, threadID);
-    const ok = await downloadAndSend(api, event, fbUrl, "worst");
-    react(api, ok ? "✅" : "❌", messageID, threadID);
+    await downloadAndSend(api, event, fbUrl, "worst");
   },
 
   onStart: async ({ api, event, args, message }) => {

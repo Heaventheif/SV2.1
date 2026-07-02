@@ -5,8 +5,6 @@ const fs    = require("fs-extra");
 const os    = require("os");
 const path  = require("path");
 
-const { sendMoodSticker } = require("../utils/danceSticker.js");
-
 const BROWSER_HEADERS = {
   "User-Agent":
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
@@ -161,7 +159,6 @@ async function sendTrack(api, threadID, messageID, track, listMsgId = null) {
     );
 
     if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
-    sendMoodSticker(api, threadID);
   } finally {
     if (filePath) cleanTemp(filePath);
   }

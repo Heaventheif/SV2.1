@@ -13,8 +13,6 @@ const VIDEO_BLOGS = [
   "awesome-picz", "thefrogman",
 ];
 
-function react() { /* التفاعل مُعطَّل عمداً — البوت يرسل المخرجات النهائية فقط */ }
-
 module.exports = {
   config: {
     name: "random",
@@ -33,7 +31,6 @@ module.exports = {
     if (!TUMBLR_API_KEY)
       return global.safeSend(api, "⚠️ TUMBLR_API_KEY غير مضبوط", threadID, null, messageID);
 
-    react(api, messageID, threadID, "🤖");
     const tmpFile = path.join(os.tmpdir(), `tumblr_${Date.now()}.mp4`);
 
     try {
@@ -63,7 +60,6 @@ module.exports = {
       }
 
       if (!videoUrl) {
-        react(api, messageID, threadID, "❌");
         return global.safeSend(api, "❌ لم أجد فيديو الآن — حاول مرة أخرى", threadID, null, messageID);
       }
 
@@ -74,7 +70,6 @@ module.exports = {
       });
 
       if (dlResponse.status !== 200) {
-        react(api, messageID, threadID, "✅");
         return global.safeSend(api, 
           `🎬 ${caption || "فيديو عشوائي"}\n📺 @${blogName}\n\n🔗 ${postUrl}`,
           threadID, null, messageID
@@ -91,12 +86,10 @@ module.exports = {
       const sizeMB = fs.statSync(tmpFile).size / (1024 * 1024);
 
       if (sizeMB < 0.01) {
-        react(api, messageID, threadID, "❌");
         return global.safeSend(api, "❌ الفيديو فارغ — حاول مرة أخرى", threadID, null, messageID);
       }
 
       if (sizeMB > 25) {
-        react(api, messageID, threadID, "✅");
         return global.safeSend(api, 
           `🎬 ${caption || "فيديو عشوائي"}\n📺 @${blogName}\n💾 ${sizeMB.toFixed(1)}MB\n\n🔗 ${postUrl}`,
           threadID, null, messageID
@@ -110,10 +103,8 @@ module.exports = {
         )
       );
 
-      react(api, messageID, threadID, "✅");
 
     } catch (error) {
-      react(api, messageID, threadID, "❌");
       let errMsg = "❌ فشل جلب الفيديو\n";
       if (error.response?.status === 401)     errMsg += "🔑 API Key غير صالح";
       else if (error.response?.status === 429) errMsg += "⚠️ تجاوزت حد الطلبات";

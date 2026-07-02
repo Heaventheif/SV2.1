@@ -8,8 +8,6 @@ const path  = require("path");
 
 const BASE = "https://yt-dlp-stream.onrender.com/api";
 
-const { sendMoodSticker } = require("../utils/danceSticker.js");
-
 const EMOJI_PAIRS = [
   ["👍", "❤️"], ["😆", "😮"], ["😢", "😡"],
   ["🥰", "👏"], ["🤩", "😘"], ["😍", "😭"],
@@ -102,7 +100,6 @@ async function downloadAndSend(api, threadID, messageID, query, wantMp4, listMsg
     );
 
     if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
-    if (!wantMp4) sendMoodSticker(api, threadID);
 
   } catch (e) {
     global.safeSend(api, `❌ ${e.response?.data?.error || e.message}`, threadID, null, messageID);

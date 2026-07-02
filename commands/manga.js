@@ -340,6 +340,34 @@ async function downloadImage(url, index) {
   return filePath;
 }
 
+// ─── تحميل بتزامن محدود ─────────────────────────────────────
+// بدل فتح كل الطلبات دفعة واحدة (Promise.allSettled على مصفوفة كاملة قد
+// تصل 80-100 صفحة)، نُبقي عدداً محدوداً من الطلبات النشطة في نفس الوقت.
+// هذا يقلّل الضغط على الذاكرة/الشبكة بشكل كبير على الأجهزة محدودة الموارد
+// (مثل Termux)، مع الحفاظ على ترتيب النتائج الأصلي عبر الفهرس (index).
+const DOWNLOAD_CONCURRENCY = 6;
+
+async function downloadAllWithLimit(pageUrls, limit = DOWNLOAD_CONCURRENCY) {
+  const results = new Array(pageUrls.length).fill(null);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const i = nextIndex++;
+      if (i >= pageUrls.length) return;
+      try {
+        results[i] = await downloadImage(pageUrls[i], i);
+      } catch (_) {
+        results[i] = null;
+      }
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, pageUrls.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
 module.exports = {
   config: {
     name: "manga",
@@ -477,17 +505,8 @@ module.exports = {
         `📥 جاري تحميل ${pageUrls.length} صفحة...\n📖 ${mangaTitle}\n📄 الفصل ${chapterNumber}`
       );
 
-      // تحميل جميع الصور (محاولات مستقلة، فشل صورة لا يوقف الباقي)
-      const downloaded = new Array(pageUrls.length).fill(null);
-      await Promise.allSettled(
-        pageUrls.map(async (url, i) => {
-          try {
-            downloaded[i] = await downloadImage(url, i);
-          } catch (_) {
-            downloaded[i] = null;
-          }
-        })
-      );
+      // تحميل الصور بتزامن محدود (محاولات مستقلة، فشل صورة لا يوقف الباقي)
+      const downloaded = await downloadAllWithLimit(pageUrls);
 
       const validFiles = downloaded.filter(Boolean);
       if (!validFiles.length) {
@@ -508,13 +527,20 @@ module.exports = {
             : `📖 ${mangaTitle} — الفصل ${chapterNumber}`;
 
         try {
-          await global.safeSend(
-            api,
-            { body, attachment: group.map((f) => fs.createReadStream(f)) },
-            threadID,
-            null,
-            isFirst ? messageID : null
-          );
+          // ننتظر تأكيد الإرسال الفعلي عبر الـ callback، وليس فقط رجوع
+          // الـ Promise من الطابور الخارجي (الذي يتحلّل بعد فاصل زمني
+          // ثابت صغير، لا بعد اكتمال الرفع الفعلي). بدون هذا، دفعة لاحقة
+          // أصغر (أسرع رفعاً) قد تصل قبل دفعة أولى أكبر فيختل ترتيب صفحات
+          // الفصل عند وصولها للمستخدم.
+          await new Promise((resolve, reject) => {
+            global.safeSend(
+              api,
+              { body, attachment: group.map((f) => fs.createReadStream(f)) },
+              threadID,
+              (err) => (err ? reject(err) : resolve()),
+              isFirst ? messageID : null
+            );
+          });
         } catch (err) {
           allSent = false;
         }

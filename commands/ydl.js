@@ -8,8 +8,6 @@ const path  = require("path");
 
 const API_BASE = "https://ccproject.serv00.net/ytdl2.php";
 
-const { sendMoodSticker } = require("../utils/danceSticker.js");
-
 const EMOJI_PAIRS = [
   ["👍", "❤️"], ["😆", "😮"], ["😢", "😡"],
   ["🥰", "👏"], ["🤩", "😘"], ["😍", "😭"],
@@ -64,7 +62,6 @@ async function downloadAndSend(api, threadID, messageID, youtubeUrl, wantMp4, li
     );
 
     if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
-    if (!wantMp4) sendMoodSticker(api, threadID);
 
   } catch (e) {
     global.safeSend(api, `❌ ${e.response?.data?.error || e.message}`, threadID, null, messageID);

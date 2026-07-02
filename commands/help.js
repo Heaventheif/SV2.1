@@ -6,15 +6,15 @@ const path = require("path");
 // ═══════════════════════════════════════════════════════════════
 const CATEGORY_MERGE = {
   "الذكاء الاصطناعي": [
-    "ذكاء اصطناعي", "ai", "gemini", "gptx", "groq", "gpt", "hf", "cerebras"
+    "ذكاء اصطناعي", "gemini", "gptx", "groq", "gpt"
   ],
   "الوسائط والتحميل": [
-    "media", "وسائط", "download", "تحميل",
-    "yt", "ydl", "yt2", "sc", "sc2", "sing",
-    "img", "tts", "pinterest", "random"
+    "media", "وسائط", "download",
+    "yt", "ydl", "yt2", "sc", "sing",
+    "tts", "pinterest", "random"
   ],
   "الألعاب والترفيه": [
-    "games", "fun", "chess", "catfact", "dogfact", "novel"
+    "games", "fun", "chess", "animal", "novel"
   ],
   "الإدارة والإشراف": [
     "admin", "إشراف", "إدارة",
@@ -22,8 +22,7 @@ const CATEGORY_MERGE = {
   ],
   "الأدوات العامة": [
     "أدوات", "tools",
-    "help", "tr", "gid", "uid", "decor", "quran",
-    "profile", "unsend"
+    "help", "tr", "gid", "uid", "quran", "unsend"
   ]
 };
 
@@ -46,7 +45,7 @@ const FALLBACK_DESC = {
 //    config: { name: "fb", ..., hidden: true }
 //    (الطريقتان تعملان معًا — يكفي توفر إحداهما لإخفاء الأمر)
 // ═══════════════════════════════════════════════════════════════
-const HIDDEN_COMMANDS = ["fb","up","profile","help"];
+const HIDDEN_COMMANDS = ["fb","up","help"];
 
 module.exports = {
   config: {

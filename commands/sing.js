@@ -3,8 +3,6 @@ const fs    = require('fs-extra');
 const path  = require('path');
 const os    = require('os');
 
-const { sendMoodSticker } = require("../utils/danceSticker.js");
-
 if (!global.soundcloudSearchSessions) global.soundcloudSearchSessions = {};
 if (!global.__singCleanupRegistered) {
   global.__singCleanupRegistered = true;
@@ -27,8 +25,6 @@ function getApiKey() {
 function getTempPath() {
   return path.join(os.tmpdir(), `sing_${Date.now()}.mp3`);
 }
-
-function react() { /* التفاعل مُعطَّل عمداً — البوت يرسل المخرجات النهائية فقط */ }
 
 // بدون رسالة "جارٍ التحميل" — يحذف القائمة بعد الإرسال
 async function downloadAndSend(api, threadID, messageID, originMsgID, track, listMsgId = null) {
@@ -72,11 +68,8 @@ async function downloadAndSend(api, threadID, messageID, originMsgID, track, lis
     );
 
     if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
-    if (originMsgID) react(api, originMsgID, threadID, "✅");
-    sendMoodSticker(api, threadID);
 
   } catch (error) {
-    if (originMsgID) react(api, originMsgID, threadID, "❌");
     let msg;
     if (error.message.includes("25MB"))       msg = "⚠️ الملف أكبر من 25MB.";
     else if (error.code === 'ECONNABORTED')   msg = "❌ انتهت مهلة التحميل.";
@@ -127,7 +120,6 @@ module.exports = {
       const listMsgId   = session.listMsgId;
       delete global.soundcloudSearchSessions[senderID];
 
-      if (originMsgID) react(api, originMsgID, threadID, "🤖");
       await downloadAndSend(api, threadID, messageID, originMsgID, chosenTrack, listMsgId);
       return;
     }
@@ -137,8 +129,6 @@ module.exports = {
     const songName  = showList ? rest.slice(2).trim() : rest;
     if (!songName) return message.reply("❌ مثال: sing shape of you");
 
-    react(api, messageID, threadID, "🤖");
-
     try {
       const res = await axios.get('https://api.ferdev.my.id/search/soundcloud', {
         params: { query: songName, apikey: getApiKey() },
@@ -147,7 +137,6 @@ module.exports = {
 
       const items = res.data?.result || [];
       if (items.length === 0) {
-        react(api, messageID, threadID, "❌");
         return global.safeSend(api, "❌ لم يتم العثور على نتائج.", threadID, null, messageID);
       }
 
@@ -159,12 +148,10 @@ module.exports = {
       });
 
       if (allTracks.length === 0) {
-        react(api, messageID, threadID, "❌");
         return global.safeSend(api, "❌ فشل استخراج الروابط.", threadID, null, messageID);
       }
 
       if (!showList) {
-        react(api, messageID, threadID, "✅");
         return await downloadAndSend(api, threadID, messageID, messageID, allTracks[0]);
       }
 
@@ -197,7 +184,6 @@ module.exports = {
             delete global.client.reactionListener[sent.messageID];
             delete global.soundcloudSearchSessions[senderID];
 
-            react(api, messageID, threadID, "🤖");
             await downloadAndSend(api, threadID, messageID, messageID, allTracks[idx], sent.messageID);
           },
         };
@@ -207,10 +193,7 @@ module.exports = {
         }, 120000);
       }
 
-      react(api, messageID, threadID, "✅");
-
     } catch (error) {
-      react(api, messageID, threadID, "❌");
       if (error.code === 'ECONNABORTED' || error.message.includes('timeout'))
         return global.safeSend(api, "❌ انتهت مهلة البحث، حاول مرة أخرى.", threadID, null, messageID);
       global.safeSend(api, "❌ خطأ أثناء البحث.", threadID, null, messageID);

@@ -6,8 +6,6 @@ const fs    = require("fs-extra");
 const os    = require("os");
 const path  = require("path");
 
-const { sendMoodSticker } = require("../utils/danceSticker.js");
-
 const HF = `http://localhost:${process.env.PORT || 10000}`;
 
 const EMOJI_PAIRS = [
@@ -105,7 +103,6 @@ async function downloadAndSend(api, threadID, messageID, ytUrl, wantMp4, listMsg
 
     // حذف رسالة القائمة بعد نجاح الإرسال
     if (listMsgId) { try { await api.unsendMessage(listMsgId, threadID); } catch (_) {} }
-    if (!wantMp4) sendMoodSticker(api, threadID);
 
   } catch (err) {
     let msg = err.message || "خطأ غير معروف";

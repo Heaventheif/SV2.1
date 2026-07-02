@@ -3,18 +3,17 @@ const fs   = require("fs-extra");
 const path = require("path");
 
 const CACHE_ROOT = path.join(__dirname, "..", "cache");
-// ← إصلاح: القائمة القديمة كانت تتضمن مجلدات لا يكتب فيها أي أمر
-// فعليًا في المشروع الحالي ("ai_sessions", "ai2_sessions", "sing",
-// "tiktok", "ytdl")، بينما المجلد النشط الوحيد فعليًا (cache/pinterest
-// الذي يكتب فيه pinterest.js) كان غير مُدرَج إطلاقًا فلا يُنظَّف عبر
-// .up أبدًا. تم تحديث القوائم لتعكس الاستخدام الفعلي الحالي.
+// ← ملاحظة محدَّثة: pinterest.js الحالي يستخدم os.tmpdir() وينظّف ملفاته
+// بنفسه فور الإرسال — لا يكتب في cache/pinterest إطلاقاً، فلا داعٍ لتضمينه
+// هنا. لا يوجد حالياً أي أمر يكتب في مجلد ضمن cache/ عدا ai_sessions_gptx.
 const AI_DIRS    = ["ai_sessions_gptx"];
-const MEDIA_DIRS = ["pinterest"];
+const MEDIA_DIRS = [];
+// ← تم حذف "mediaSearchSessions" و"youtubeSearchSessions" و"audioSearchSessions"
+// من هذه القائمة: لا يوجد أي أمر في المشروع الحالي يُنشئ متغيرات global
+// بهذه الأسماء (بقايا من أوامر قديمة أُزيلت)، فكانت لا تفعل شيئاً سوى
+// فحص عبثي عند كل .up. الوحيد الفعلي هو soundcloudSearchSessions (sing.js).
 const GLOBAL_SESSIONS = [
     "soundcloudSearchSessions",
-    "mediaSearchSessions",
-    "youtubeSearchSessions",
-    "audioSearchSessions",
 ];
 
 function formatBytes(b) {
@@ -89,11 +88,13 @@ function countCommandFiles() {
 // ─── دالة Hot Reload المباشرة ────────────────────────────────
 function doReload() {
     // global.reloadCommands معرّفة في index.js كـ loadCommands
+    // وترجع مصفوفة أخطاء التحميل (ملف بملف) بدل ابتلاعها بصمت
     if (typeof global.reloadCommands === "function") {
-        global.reloadCommands();
-        return { ok: true };
+        const errors = global.reloadCommands() || [];
+        return { ok: errors.length === 0, fileErrors: errors };
     }
     // fallback يدوي: امسح require.cache لكل أوامر
+    const fileErrors = [];
     try {
         const dir = path.join(__dirname, "..", "commands");
         const files = fs.readdirSync(dir).filter(f => f.endsWith(".js"));
@@ -116,11 +117,13 @@ function doReload() {
                     });
                 }
                 if (mod.onChat || mod.handleEvent) global.eventCommands?.push(mod);
-            } catch (_) {}
+            } catch (e) {
+                fileErrors.push({ file, message: e.message });
+            }
         }
-        return { ok: true };
+        return { ok: fileErrors.length === 0, fileErrors };
     } catch (e) {
-        return { ok: false, err: e.message };
+        return { ok: false, err: e.message, fileErrors };
     }
 }
 
@@ -141,7 +144,7 @@ module.exports = {
         const t0 = Date.now();
 
         // ── 1. Hot Reload ────────────────────────────────────
-        const { ok: reloadOk, err: reloadErr } = doReload();
+        const { ok: reloadOk, err: reloadErr, fileErrors } = doReload();
         const fileCount   = countCommandFiles();
         const eventsCount = global.eventCommands?.length || 0;
 
@@ -190,7 +193,17 @@ module.exports = {
         L.push("╚══════════════════════╝");
         L.push("");
 
-        L.push(reloadOk ? "✅ Hot Reload نجح" : `❌ فشل Reload: ${reloadErr?.slice(0,60)}`);
+        if (reloadOk) {
+            L.push("✅ Hot Reload نجح");
+        } else if (reloadErr) {
+            L.push(`❌ فشل Reload: ${reloadErr.slice(0,60)}`);
+        } else {
+            L.push(`⚠️ Hot Reload انتهى مع أخطاء في ${fileErrors.length} ملف:`);
+            for (const fe of fileErrors.slice(0, 5)) {
+                L.push(`  ✗ ${fe.file}: ${fe.message.slice(0, 80)}`);
+            }
+            if (fileErrors.length > 5) L.push(`  … و${fileErrors.length - 5} ملف آخر`);
+        }
         L.push(`   📂 أوامر: ${fileCount} ملف | أحداث: ${eventsCount}`);
         L.push("");
 

@@ -10,11 +10,11 @@ const MAX_IMAGES = 80;       // سقف أمان لعدد الصور المُرس
 module.exports = {
   config: {
     name: "manga2",
-    aliases: ["مانجا", "m"],
+    aliases: ["مانجا2", "m"],
     role: 0,
     countDown: 15,
     category: "وسائط",
-    description: "كشط وإرسال صور فصل من مانجا العاشق - استخدم .manga <اسم المانجا> <رقم الفصل>"
+    description: "كشط وإرسال صور فصل من مانجا العاشق - استخدم .manga2 <اسم المانجا> <رقم الفصل>"
   },
 
   onStart: async ({ api, event, args }) => {
@@ -22,7 +22,7 @@ module.exports = {
 
     if (args.length < 2) {
       return api.sendMessage(
-        `⚠️ الاستخدام:\n.manga <اسم المانجا> <رقم الفصل>\n\n📌 مثال: .manga one piece 234\n📌 مثال: .manga kingdom 1`,
+        `⚠️ الاستخدام:\n.manga2 <اسم المانجا> <رقم الفصل>\n\n📌 مثال: .manga2 one piece 234\n📌 مثال: .manga2 kingdom 1`,
         threadID,
         messageID
       );
@@ -131,10 +131,18 @@ module.exports = {
 
         if (streams.length > 0) {
           try {
-            await api.sendMessage(
-              { attachment: streams },
-              threadID
-            );
+            // مهم: ننتظر تأكيد الإرسال الفعلي عبر الـ callback، وليس فقط
+            // رجوع الـ Promise من الطابور الخارجي (الذي قد يتحلّل قبل اكتمال
+            // الرفع الفعلي على فيسبوك). بدون هذا، دفعة صغيرة لاحقة (أسرع
+            // رفعاً) قد تصل قبل الدفعة الأولى الكبيرة (15 صورة مثلاً)
+            // فيختل ترتيب صفحات الفصل عند وصولها للمستخدم.
+            await new Promise((resolve, reject) => {
+              api.sendMessage(
+                { attachment: streams },
+                threadID,
+                (err) => (err ? reject(err) : resolve())
+              );
+            });
             sentCount += streams.length;
           } catch (e) {
             failedCount += streams.length;
